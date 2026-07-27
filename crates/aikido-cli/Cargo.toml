@@ -29,6 +29,7 @@ chrono.workspace = true
 jaq-core = "3"
 jaq-std = "3"
 jaq-json = { version = "2", features = ["serde"] }
+rpassword = "7"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -575,6 +575,95 @@ async fn auth_login_with_env_credentials_stores_all_four_fields() {
 }
 
 #[tokio::test]
+async fn auth_login_announces_env_credential_source_on_stderr() {
+    // A stale exported secret silently re-exchanged is the footgun this
+    // guards against: env-sourced credentials must be announced.
+    let server = MockServer::start().await;
+    mount_token_endpoint(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    aikido(&server, dir.path())
+        .env("AIKIDO_CLIENT_ID", "test-client-id")
+        .env("AIKIDO_CLIENT_SECRET", "test-client-secret")
+        .args(["auth", "login", "--json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Using client credentials from AIKIDO_CLIENT_ID/AIKIDO_CLIENT_SECRET",
+        ));
+}
+
+/// Non-TTY stdin: two piped lines (client ID, then secret) log in without
+/// any interactivity. The Go CLI could not be scripted this way reliably.
+#[tokio::test]
+async fn auth_login_accepts_two_lines_piped_on_stdin() {
+    let server = MockServer::start().await;
+    mount_token_endpoint(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    aikido(&server, dir.path())
+        .args(["auth", "login", "--json"])
+        .write_stdin("test-client-id\ntest-client-secret\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Authenticated successfully"));
+
+    let creds: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("credentials.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(creds["client_id"], "test-client-id");
+    assert_eq!(creds["client_secret"], "test-client-secret");
+    assert_eq!(creds["access_token"], "fresh-token");
+}
+
+/// Non-TTY stdin with no input: a clear auth_error naming the alternatives,
+/// not the Go CLI's bare "EOF".
+#[tokio::test]
+async fn auth_login_with_empty_stdin_names_the_alternatives() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = aikido(&server, dir.path())
+        .args(["auth", "login", "--json"])
+        .write_stdin("")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["code"], "auth_error");
+    let message = envelope["error"].as_str().unwrap();
+    assert!(
+        message.contains("AIKIDO_CLIENT_ID"),
+        "must name the env vars: {message}"
+    );
+    assert!(
+        message.contains("pipe two lines"),
+        "must name the stdin option: {message}"
+    );
+    assert!(!message.contains("EOF"), "no bare EOF: {message}");
+    assert!(!dir.path().join("credentials.json").exists());
+}
+
+/// Only one line piped (secret missing) is the same clear failure.
+#[tokio::test]
+async fn auth_login_with_missing_secret_line_fails_clearly() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = aikido(&server, dir.path())
+        .args(["auth", "login", "--json"])
+        .write_stdin("only-a-client-id\n")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["code"], "auth_error");
+}
+
+#[tokio::test]
 async fn auth_login_with_bad_credentials_fails_with_auth_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -593,7 +682,10 @@ async fn auth_login_with_bad_credentials_fails_with_auth_error() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(4));
-    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    // stderr carries the env-source announcement line, then the envelope.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let envelope: Value =
+        serde_json::from_str(&stderr[stderr.find('{').expect("envelope on stderr")..]).unwrap();
     assert_eq!(envelope["code"], "auth_error");
     assert!(
         !dir.path().join("credentials.json").exists(),

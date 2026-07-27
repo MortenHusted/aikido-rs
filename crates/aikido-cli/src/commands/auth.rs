@@ -7,7 +7,7 @@
 //! reported any set `AIKIDO_TOKEN` as `authenticated: true`, which masked a
 //! revoked token for three weeks.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 
 use aikido_core::auth::exchange_token;
 use aikido_core::client::base_url_from_env;
@@ -58,36 +58,76 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
     }
 }
 
+/// Where `auth login` gets the client credentials, in precedence order:
+/// env vars (announced on stderr so a stale export is never silent), then an
+/// interactive prompt when stdin is a TTY (secret read without echo), then
+/// two lines piped on stdin. Empty/EOF stdin fails with the alternatives
+/// spelled out instead of the Go CLI's bare "EOF".
 fn credentials_from_env_or_prompt() -> Result<(String, String), ApiError> {
     let env_id = std::env::var(CLIENT_ID_ENV).unwrap_or_default();
     let env_secret = std::env::var(CLIENT_SECRET_ENV).unwrap_or_default();
     if !env_id.is_empty() && !env_secret.is_empty() {
+        eprintln!(
+            "Using client credentials from {CLIENT_ID_ENV}/{CLIENT_SECRET_ENV} \
+             environment variables (unset them to be prompted)."
+        );
         return Ok((env_id, env_secret));
     }
 
-    let prompt = |label: &str| -> Result<String, ApiError> {
-        eprint!("{label}: ");
-        std::io::stderr().flush().ok();
-        let mut line = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|err| ApiError::Api {
-                status: 0,
-                message: format!("read {label}: {err}"),
-            })?;
-        Ok(line.trim().to_string())
+    let (client_id, client_secret) = if std::io::stdin().is_terminal() {
+        prompt_interactive()?
+    } else {
+        read_piped_credentials()?
     };
 
-    let client_id = prompt("Client ID")?;
-    let client_secret = prompt("Client Secret")?;
     if client_id.is_empty() || client_secret.is_empty() {
-        return Err(ApiError::Api {
-            status: 0,
-            message: "client ID and secret are required".to_string(),
-        });
+        return Err(missing_credentials_error());
     }
     Ok((client_id, client_secret))
+}
+
+/// Interactive prompt: client ID echoed, secret read without echo.
+fn prompt_interactive() -> Result<(String, String), ApiError> {
+    eprint!("Client ID: ");
+    std::io::stderr().flush().ok();
+    let mut client_id = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut client_id)
+        .map_err(|err| ApiError::auth(format!("read client ID: {err}")))?;
+
+    let client_secret = rpassword::prompt_password("Client Secret (hidden): ")
+        .map_err(|err| ApiError::auth(format!("read client secret: {err}")))?;
+
+    Ok((
+        client_id.trim().to_string(),
+        client_secret.trim().to_string(),
+    ))
+}
+
+/// Scripted login: two lines on stdin — client ID, then client secret.
+fn read_piped_credentials() -> Result<(String, String), ApiError> {
+    let mut lines = std::io::stdin().lock().lines();
+    let mut next_line = || -> Result<String, ApiError> {
+        match lines.next() {
+            Some(Ok(line)) => Ok(line.trim().to_string()),
+            Some(Err(err)) => Err(ApiError::auth(format!(
+                "read credentials from stdin: {err}"
+            ))),
+            None => Err(missing_credentials_error()),
+        }
+    };
+    let client_id = next_line()?;
+    let client_secret = next_line()?;
+    Ok((client_id, client_secret))
+}
+
+fn missing_credentials_error() -> ApiError {
+    ApiError::auth(
+        "no client credentials provided. Run `aikido auth login` in an interactive terminal, \
+         set AIKIDO_CLIENT_ID and AIKIDO_CLIENT_SECRET, or pipe two lines to stdin \
+         (client ID, then client secret)",
+    )
 }
 
 pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {

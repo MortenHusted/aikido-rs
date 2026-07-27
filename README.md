@@ -30,6 +30,22 @@ aikido auth status    # validated with a live API call — see below
 aikido auth logout
 ```
 
+`auth login` picks up credentials from the first available source:
+
+1. **Env vars** — when `AIKIDO_CLIENT_ID` and `AIKIDO_CLIENT_SECRET` are both
+   set, they are used and no prompt appears. **Footgun**: a stale secret still
+   exported in your shell (e.g. after a rotation) gets silently re-exchanged.
+   Env-first precedence is kept because it matches how every other command
+   resolves credentials and keeps CI scriptable — but login announces the
+   source on stderr (`Using client credentials from AIKIDO_CLIENT_ID/...`)
+   so it is never silent. Unset the vars to be prompted.
+2. **Interactive prompt** — when stdin is a TTY. The client secret is read
+   without echoing (via `rpassword`).
+3. **Piped stdin** — when stdin is not a TTY, two lines are read: client ID,
+   then client secret (`printf '%s\n%s\n' "$ID" "$SECRET" | aikido auth login`).
+   Empty stdin fails with an `auth_error` envelope naming these alternatives
+   (the Go CLI died with a bare `EOF` here).
+
 Credentials (client id, client secret, current access token, expiry) are
 stored in the OS keychain under service `aikido-cli` (user `default`), with a
 plaintext fallback at `~/.config/aikido/credentials.json` (mode 0600). The
