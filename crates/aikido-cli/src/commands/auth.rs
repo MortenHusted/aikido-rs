@@ -134,7 +134,10 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
     // exercise.
     let (authenticated, checked, check_note) = match session
         .client
-        .get("/repositories/code", &[("per_page", "1".to_string()), ("page", "0".to_string())])
+        .get(
+            "/repositories/code",
+            &[("per_page", "1".to_string()), ("page", "0".to_string())],
+        )
         .await
     {
         Ok(_) => (true, true, String::new()),
@@ -168,8 +171,13 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
         println!("{summary}");
         return Ok(());
     }
-    render_ok(&format, Response::new(data).with_summary(summary), &[], None)
-        .map_err(render_failure)
+    render_ok(
+        &format,
+        Response::new(data).with_summary(summary),
+        &[],
+        None,
+    )
+    .map_err(render_failure)
 }
 
 pub fn logout(flags: &GlobalFlags) -> Result<(), ApiError> {
@@ -183,7 +191,8 @@ pub fn logout(flags: &GlobalFlags) -> Result<(), ApiError> {
             eprintln!("{summary}");
             Ok(())
         }
-        format => render_ok(&format, Response::summary_only(summary), &[], None)
-            .map_err(render_failure),
+        format => {
+            render_ok(&format, Response::summary_only(summary), &[], None).map_err(render_failure)
+        }
     }
 }

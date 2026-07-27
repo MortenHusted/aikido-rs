@@ -10,10 +10,22 @@ use super::issues::render_failure;
 use super::require_session;
 
 const LIST_COLUMNS: &[Column] = &[
-    Column { header: "Name", key: "name" },
-    Column { header: "Tag", key: "tag" },
-    Column { header: "Provider", key: "provider" },
-    Column { header: "Status", key: "status" },
+    Column {
+        header: "Name",
+        key: "name",
+    },
+    Column {
+        header: "Tag",
+        key: "tag",
+    },
+    Column {
+        header: "Provider",
+        key: "provider",
+    },
+    Column {
+        header: "Status",
+        key: "status",
+    },
 ];
 
 pub async fn list(

@@ -130,14 +130,13 @@ impl Client {
 
         // On 401, refresh the token via client credentials, persist it, and
         // retry once.
-        let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            && self.refresh.is_some()
-        {
-            self.refresh_token().await?;
-            self.send(&method, &url, query, body.as_ref()).await?
-        } else {
-            response
-        };
+        let response =
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.refresh.is_some() {
+                self.refresh_token().await?;
+                self.send(&method, &url, query, body.as_ref()).await?
+            } else {
+                response
+            };
 
         parse_response(response).await
     }
@@ -172,13 +171,13 @@ impl Client {
     /// Exchange client credentials for a fresh access token, swap it into
     /// this client, and persist it (with its new expiry) to the store.
     async fn refresh_token(&self) -> Result<(), ApiError> {
-        let refresh = self.refresh.as_ref().expect("refresh_token without credentials");
-        let token = auth::exchange_token(
-            &self.base_url,
-            &refresh.client_id,
-            &refresh.client_secret,
-        )
-        .await?;
+        let refresh = self
+            .refresh
+            .as_ref()
+            .expect("refresh_token without credentials");
+        let token =
+            auth::exchange_token(&self.base_url, &refresh.client_id, &refresh.client_secret)
+                .await?;
 
         *self.token.lock().expect("token mutex poisoned") = token.access_token.clone();
 

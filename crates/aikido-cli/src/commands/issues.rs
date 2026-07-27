@@ -12,11 +12,26 @@ use crate::output::{
 use super::require_session;
 
 const LIST_COLUMNS: &[Column] = &[
-    Column { header: "Severity", key: "severity" },
-    Column { header: "CVE", key: "cve_id" },
-    Column { header: "Package", key: "affected_package" },
-    Column { header: "Repo", key: "code_repo_name" },
-    Column { header: "Status", key: "status" },
+    Column {
+        header: "Severity",
+        key: "severity",
+    },
+    Column {
+        header: "CVE",
+        key: "cve_id",
+    },
+    Column {
+        header: "Package",
+        key: "affected_package",
+    },
+    Column {
+        header: "Repo",
+        key: "code_repo_name",
+    },
+    Column {
+        header: "Status",
+        key: "status",
+    },
 ];
 
 pub async fn list(
@@ -40,8 +55,13 @@ pub async fn list(
     let resp = Response::new(Value::Array(issues))
         .with_summary(format!("{count} issues"))
         .with_count(count);
-    render_ok(&flags.format(), resp, LIST_COLUMNS, Some(&format_issue_line))
-        .map_err(render_failure)
+    render_ok(
+        &flags.format(),
+        resp,
+        LIST_COLUMNS,
+        Some(&format_issue_line),
+    )
+    .map_err(render_failure)
 }
 
 pub async fn show(flags: &GlobalFlags, group_id: u64) -> Result<(), ApiError> {
@@ -84,7 +104,10 @@ pub async fn severity(
 ) -> Result<(), ApiError> {
     let session = require_session(flags)?;
     api::adjust_severity(&session.client, issue_id, level, reason).await?;
-    mutation_done(flags, format!("Issue {issue_id} severity adjusted to {level}."))
+    mutation_done(
+        flags,
+        format!("Issue {issue_id} severity adjusted to {level}."),
+    )
 }
 
 /// Mutation success: a summary-only envelope on stdout in machine formats,
@@ -95,8 +118,9 @@ pub fn mutation_done(flags: &GlobalFlags, summary: String) -> Result<(), ApiErro
             eprintln!("{summary}");
             Ok(())
         }
-        format => render_ok(&format, Response::summary_only(summary), &[], None)
-            .map_err(render_failure),
+        format => {
+            render_ok(&format, Response::summary_only(summary), &[], None).map_err(render_failure)
+        }
     }
 }
 
@@ -158,7 +182,10 @@ fn format_issue_detail(item: &Value) -> String {
             ),
         ),
         ("Status", str_val(item, "group_status")),
-        ("Fix time", format!("~{} min", str_val(item, "time_to_fix_minutes"))),
+        (
+            "Fix time",
+            format!("~{} min", str_val(item, "time_to_fix_minutes")),
+        ),
         ("Description", str_val(item, "description")),
         ("How to fix", str_val(item, "how_to_fix")),
         ("CVEs", cves),

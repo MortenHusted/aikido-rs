@@ -53,7 +53,10 @@ async fn token_exchange_sends_basic_auth_and_parses_response() {
     // expires_at is an absolute RFC3339 timestamp ~3600s out.
     let expires_at = chrono::DateTime::parse_from_rfc3339(&token.expires_at()).unwrap();
     let delta = expires_at.timestamp() - chrono::Utc::now().timestamp();
-    assert!((3590..=3610).contains(&delta), "unexpected expiry delta {delta}");
+    assert!(
+        (3590..=3610).contains(&delta),
+        "unexpected expiry delta {delta}"
+    );
 }
 
 #[tokio::test]
@@ -124,7 +127,10 @@ async fn refresh_on_401_persists_new_token_and_expiry_to_the_store() {
     assert_eq!(persisted.access_token, "fresh-token");
     assert_eq!(persisted.client_id, "test-client-id");
     assert_eq!(persisted.client_secret, "test-client-secret");
-    assert_ne!(persisted.expires_at, "2020-01-01T00:00:00Z", "expiry must move");
+    assert_ne!(
+        persisted.expires_at, "2020-01-01T00:00:00Z",
+        "expiry must move"
+    );
     let expires_at = chrono::DateTime::parse_from_rfc3339(&persisted.expires_at).unwrap();
     assert!(expires_at.timestamp() > chrono::Utc::now().timestamp() + 3000);
 
@@ -243,7 +249,10 @@ fn store_round_trips_the_go_wire_format() {
         .iter()
         .map(|key| raw.find(&format!("\"{key}\"")).expect(key))
         .collect();
-    assert!(positions.windows(2).all(|w| w[0] < w[1]), "field order: {raw}");
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "field order: {raw}"
+    );
 }
 
 #[cfg(unix)]

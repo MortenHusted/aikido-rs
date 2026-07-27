@@ -99,7 +99,12 @@ async fn issues_list_json_envelope_is_exactly_ok_data_summary_meta() {
     assert_eq!(envelope["summary"], "2 issues");
     assert_eq!(envelope["meta"]["count"], 2);
     // Exactly the envelope keys, and in contract order.
-    let keys: Vec<&str> = envelope.as_object().unwrap().keys().map(String::as_str).collect();
+    let keys: Vec<&str> = envelope
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(keys.len(), 4);
     for key in ["ok", "data", "summary", "meta"] {
         assert!(keys.contains(&key), "missing envelope key {key}");
@@ -108,7 +113,10 @@ async fn issues_list_json_envelope_is_exactly_ok_data_summary_meta() {
         .iter()
         .map(|k| stdout.find(k).unwrap())
         .collect();
-    assert!(positions.windows(2).all(|w| w[0] < w[1]), "envelope key order: {stdout}");
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "envelope key order: {stdout}"
+    );
 }
 
 #[tokio::test]
@@ -277,7 +285,9 @@ async fn issues_severity_posts_adjustment_and_reports_success() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/public/v1/issues/5/severity/adjust"))
-        .and(body_json(json!({ "adjusted_severity": "low", "reason": "test env only" })))
+        .and(body_json(
+            json!({ "adjusted_severity": "low", "reason": "test env only" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
         .expect(1)
         .mount(&server)
@@ -288,7 +298,14 @@ async fn issues_severity_posts_adjustment_and_reports_success() {
 
     let output = aikido(&server, dir.path())
         .args([
-            "issues", "severity", "5", "--level", "low", "--reason", "test env only", "--json",
+            "issues",
+            "severity",
+            "5",
+            "--level",
+            "low",
+            "--reason",
+            "test env only",
+            "--json",
         ])
         .output()
         .unwrap();
@@ -414,9 +431,10 @@ async fn refreshed_token_is_persisted_for_the_next_invocation() {
         .success();
 
     // The store was updated: fresh token, moved expiry, credentials intact.
-    let creds: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("credentials.json")).unwrap())
-            .unwrap();
+    let creds: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("credentials.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(creds["access_token"], "fresh-token");
     assert_eq!(creds["client_id"], "test-client-id");
     assert_ne!(creds["expires_at"], "2020-01-01T00:00:00Z");
@@ -546,9 +564,10 @@ async fn auth_login_with_env_credentials_stores_all_four_fields() {
         .success()
         .stdout(predicate::str::contains("Authenticated successfully"));
 
-    let creds: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("credentials.json")).unwrap())
-            .unwrap();
+    let creds: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("credentials.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(creds["client_id"], "test-client-id");
     assert_eq!(creds["client_secret"], "test-client-secret");
     assert_eq!(creds["access_token"], "fresh-token");
@@ -576,7 +595,10 @@ async fn auth_login_with_bad_credentials_fails_with_auth_error() {
     assert_eq!(output.status.code(), Some(4));
     let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(envelope["code"], "auth_error");
-    assert!(!dir.path().join("credentials.json").exists(), "must not store bad creds");
+    assert!(
+        !dir.path().join("credentials.json").exists(),
+        "must not store bad creds"
+    );
 }
 
 #[tokio::test]

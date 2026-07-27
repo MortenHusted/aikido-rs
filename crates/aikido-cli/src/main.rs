@@ -272,9 +272,7 @@ async fn run(command: Command, flags: &GlobalFlags) -> Result<(), ApiError> {
             ContainersCommand::List { limit, name, tag } => {
                 containers::list(flags, limit, name, tag).await
             }
-            ContainersCommand::Show { container_id } => {
-                containers::show(flags, container_id).await
-            }
+            ContainersCommand::Show { container_id } => containers::show(flags, container_id).await,
             ContainersCommand::Licenses { container_id } => {
                 containers::licenses(flags, container_id).await
             }

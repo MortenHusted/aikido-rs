@@ -52,7 +52,10 @@ pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiErr
     let stored = store.load().ok().flatten();
 
     // Client credentials: env wins, else whatever the store holds.
-    let refresh = match (non_empty_env(CLIENT_ID_ENV), non_empty_env(CLIENT_SECRET_ENV)) {
+    let refresh = match (
+        non_empty_env(CLIENT_ID_ENV),
+        non_empty_env(CLIENT_SECRET_ENV),
+    ) {
         (Some(client_id), Some(client_secret)) => Some(RefreshCredentials {
             client_id,
             client_secret,

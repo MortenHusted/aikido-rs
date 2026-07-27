@@ -143,7 +143,10 @@ pub async fn scan_repo(
 /// `GET /repositories/code/{id}/licenses/export`, normalised to a list.
 pub async fn repo_licenses(client: &Client, repo_id: u64) -> Result<Vec<Value>, ApiError> {
     let raw = client
-        .get(&format!("/repositories/code/{repo_id}/licenses/export"), &[])
+        .get(
+            &format!("/repositories/code/{repo_id}/licenses/export"),
+            &[],
+        )
         .await?;
     Ok(normalise_to_list(raw))
 }
@@ -168,7 +171,9 @@ pub async fn list_containers(
 
 /// `GET /containers/{id}`.
 pub async fn get_container(client: &Client, container_id: u64) -> Result<Value, ApiError> {
-    client.get(&format!("/containers/{container_id}"), &[]).await
+    client
+        .get(&format!("/containers/{container_id}"), &[])
+        .await
 }
 
 /// `GET /containers/{id}/licenses/export`, normalised to a list.

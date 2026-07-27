@@ -26,10 +26,11 @@ async fn list_issues_passes_filters_verbatim_and_truncates_client_side() {
         .and(query_param("filter_severities", "critical,high"))
         .and(query_param("filter_status", "open"))
         .and(query_param("filter_code_repo_name", "acme/api"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!([issue(1, "critical"), issue(2, "high"), issue(3, "high")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            issue(1, "critical"),
+            issue(2, "high"),
+            issue(3, "high")
+        ])))
         .expect(1)
         .mount(&server)
         .await;
@@ -101,7 +102,9 @@ async fn snooze_issue_puts_unix_timestamp_and_reason() {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/api/public/v1/issues/9/snooze"))
-        .and(body_json(json!({ "snooze_until": 1790000000i64, "reason": "sprint" })))
+        .and(body_json(
+            json!({ "snooze_until": 1790000000i64, "reason": "sprint" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
         .expect(1)
         .mount(&server)
@@ -118,7 +121,9 @@ async fn adjust_severity_posts_level_and_reason() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/public/v1/issues/5/severity/adjust"))
-        .and(body_json(json!({ "adjusted_severity": "low", "reason": "not reachable" })))
+        .and(body_json(
+            json!({ "adjusted_severity": "low", "reason": "not reachable" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
         .expect(1)
         .mount(&server)
@@ -192,7 +197,9 @@ async fn scan_repo_posts_scan_flags_and_accepts_204() {
         .await;
 
     let client = Client::new(server.uri(), "tok");
-    api::scan_repo(&client, 12, true, false, true).await.unwrap();
+    api::scan_repo(&client, 12, true, false, true)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

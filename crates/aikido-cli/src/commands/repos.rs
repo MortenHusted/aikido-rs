@@ -10,16 +10,37 @@ use super::issues::{mutation_done, render_failure};
 use super::require_session;
 
 const LIST_COLUMNS: &[Column] = &[
-    Column { header: "Name", key: "name" },
-    Column { header: "Provider", key: "provider" },
-    Column { header: "Branch", key: "branch" },
-    Column { header: "Last Scan", key: "last_scan_at" },
+    Column {
+        header: "Name",
+        key: "name",
+    },
+    Column {
+        header: "Provider",
+        key: "provider",
+    },
+    Column {
+        header: "Branch",
+        key: "branch",
+    },
+    Column {
+        header: "Last Scan",
+        key: "last_scan_at",
+    },
 ];
 
 pub const LICENSE_COLUMNS: &[Column] = &[
-    Column { header: "Package", key: "name" },
-    Column { header: "License", key: "license" },
-    Column { header: "Version", key: "version" },
+    Column {
+        header: "Package",
+        key: "name",
+    },
+    Column {
+        header: "License",
+        key: "license",
+    },
+    Column {
+        header: "Version",
+        key: "version",
+    },
 ];
 
 pub async fn list(
