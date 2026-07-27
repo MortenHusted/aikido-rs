@@ -28,7 +28,7 @@ tokio.workspace = true
 chrono.workspace = true
 jaq-core = "3"
 jaq-std = "3"
-jaq-json = "2"
+jaq-json = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 assert_cmd = "2"
