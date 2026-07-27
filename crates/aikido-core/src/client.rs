@@ -6,8 +6,19 @@
 //! credential store, and retries the request once. The Go CLI this replaces
 //! refreshed only in memory, so every process start burned a wasted 401 and
 //! the stored expiry froze — persisting here is deliberate, not optional.
+//!
+//! Policy (this CLI feeds an unattended scheduled job — it must fail rather
+//! than hang, and ride out transient throttling):
+//! - connect timeout 10s, total request timeout 30s;
+//! - at most 2 retries with exponential backoff. GETs retry on connect
+//!   errors, 429 (honouring `Retry-After`, capped), and 502/503/504.
+//!   Mutations (PUT/POST) retry only where a replay is provably safe: 429
+//!   (the server rejected the request without processing it) and connect
+//!   errors (the request never went out). An ambiguous 502/504 on a
+//!   mutation is surfaced, not replayed.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -17,6 +28,20 @@ use crate::error::ApiError;
 
 pub const DEFAULT_BASE_URL: &str = "https://app.aikido.dev";
 pub const BASE_URL_ENV: &str = "AIKIDO_BASE_URL";
+
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RETRIES: u32 = 2;
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(10);
+
+/// HTTP client with the connect timeout applied — shared with the token
+/// exchange path so nothing in this crate can hang indefinitely.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .expect("constructing HTTP client")
+}
 
 /// The Aikido base URL, honouring the `AIKIDO_BASE_URL` override
 /// (used by tests to point at a mock server).
@@ -44,6 +69,7 @@ pub struct Client {
     /// Where a refreshed token is persisted. `None` skips persistence
     /// (e.g. when no credentials were ever stored).
     store: Option<CredentialStore>,
+    request_timeout: Duration,
     verbose: bool,
 }
 
@@ -51,12 +77,20 @@ impl Client {
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            http: reqwest::Client::new(),
+            http: http_client(),
             token: Mutex::new(token.into()),
             refresh: None,
             store: None,
+            request_timeout: REQUEST_TIMEOUT,
             verbose: false,
         }
+    }
+
+    /// Override the total request timeout (tests use a short one to prove
+    /// the client fails instead of hanging).
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
     }
 
     /// Attach OAuth client credentials so 401s auto-refresh. Any client that
@@ -141,6 +175,9 @@ impl Client {
         parse_response(response).await
     }
 
+    /// Issue the request, retrying at most [`MAX_RETRIES`] times per the
+    /// module-level policy (429 honours `Retry-After`; only GETs retry the
+    /// ambiguous 502/504 statuses).
     async fn send(
         &self,
         method: &reqwest::Method,
@@ -148,24 +185,45 @@ impl Client {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<reqwest::Response, ApiError> {
-        let mut request = self
-            .http
-            .request(method.clone(), url)
-            .bearer_auth(self.current_token());
-        if !query.is_empty() {
-            request = request.query(query);
+        let mut attempt: u32 = 0;
+        loop {
+            let mut request = self
+                .http
+                .request(method.clone(), url)
+                .timeout(self.request_timeout)
+                .bearer_auth(self.current_token());
+            if !query.is_empty() {
+                request = request.query(query);
+            }
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            if self.verbose {
+                eprintln!("--> {method} {url}");
+            }
+            match request.send().await {
+                Ok(response) => {
+                    if self.verbose {
+                        eprintln!("<-- {}", response.status().as_u16());
+                    }
+                    let status = response.status();
+                    if attempt < MAX_RETRIES && retryable(method, status) {
+                        let delay = retry_after(&response).unwrap_or_else(|| backoff(attempt));
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok(response);
+                }
+                // A connect error means the request never went out, so a
+                // retry is safe for mutations too.
+                Err(err) if err.is_connect() && attempt < MAX_RETRIES => {
+                    tokio::time::sleep(backoff(attempt)).await;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        if self.verbose {
-            eprintln!("--> {method} {url}");
-        }
-        let response = request.send().await?;
-        if self.verbose {
-            eprintln!("<-- {}", response.status().as_u16());
-        }
-        Ok(response)
     }
 
     /// Exchange client credentials for a fresh access token, swap it into
@@ -200,6 +258,37 @@ impl Client {
     }
 }
 
+/// Whether `status` may be retried for `method` — see the module policy.
+fn retryable(method: &reqwest::Method, status: reqwest::StatusCode) -> bool {
+    match status.as_u16() {
+        // The server refused without processing — safe for any method.
+        429 => true,
+        // Ambiguous whether the origin processed the request — only replay
+        // reads.
+        502 | 503 | 504 => *method == reqwest::Method::GET,
+        _ => false,
+    }
+}
+
+/// 250ms, then 500ms.
+fn backoff(attempt: u32) -> Duration {
+    Duration::from_millis(250u64 << attempt)
+}
+
+/// `Retry-After` in seconds, capped so a hostile/buggy header cannot stall
+/// the unattended job.
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    let secs: u64 = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(secs).min(RETRY_AFTER_CAP))
+}
+
 /// Map a response to its JSON body or a structured [`ApiError`].
 async fn parse_response(response: reqwest::Response) -> Result<Value, ApiError> {
     let status = response.status();
@@ -207,10 +296,22 @@ async fn parse_response(response: reqwest::Response) -> Result<Value, ApiError> 
         return Ok(Value::Null);
     }
 
-    let body: Value = response.json().await.unwrap_or(Value::Null);
     if status.is_success() {
-        return Ok(body);
+        // A malformed 2xx body must be an error, never silently `null` —
+        // the scheduled security loop would read fabricated emptiness as
+        // "no findings" and report all-clear. An entirely absent body is
+        // fine (like 204); garbage is not.
+        let text = response.text().await.map_err(ApiError::Transport)?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        return serde_json::from_str(&text).map_err(|err| ApiError::Api {
+            status: status.as_u16(),
+            message: format!("response claimed success but its body is not valid JSON: {err}"),
+        });
     }
+
+    let body: Value = response.json().await.unwrap_or(Value::Null);
 
     // Aikido error bodies carry a human-readable `reason_phrase`.
     let reason = body

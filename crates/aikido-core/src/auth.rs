@@ -28,8 +28,12 @@ pub async fn exchange_token(
     client_secret: &str,
 ) -> Result<TokenResponse, ApiError> {
     let url = format!("{}/api/oauth/token", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    // Same timeout policy as the API client — the exchange also runs inside
+    // the unattended scheduled job and must fail rather than hang. Never
+    // retried: the 401-refresh path that calls this is itself the retry.
+    let response = crate::client::http_client()
         .post(&url)
+        .timeout(crate::client::REQUEST_TIMEOUT)
         .basic_auth(client_id, Some(client_secret))
         .json(&serde_json::json!({ "grant_type": "client_credentials" }))
         .send()
