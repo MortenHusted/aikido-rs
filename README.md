@@ -49,7 +49,14 @@ aikido auth logout
 Credentials (client id, client secret, current access token, expiry) are
 stored in the OS keychain under service `aikido-cli` (user `default`), with a
 plaintext fallback at `~/.config/aikido/credentials.json` (mode 0600). The
-stored shape is identical to the Go CLI's, so existing logins keep working.
+stored format is identical to the Go CLI's — including go-keyring's payload
+encoding — so existing logins keep working, in both directions.
+
+> Interop note: the Go CLI's keychain library (zalando/go-keyring) stores
+> every value as `go-keyring-base64:` + base64(JSON), not raw JSON. This CLI
+> decodes that prefix (and the legacy `go-keyring-encoded:` hex prefix) on
+> read and writes the same base64-prefixed format, so entries stay readable
+> whichever binary wrote them last.
 
 Environment variables:
 
