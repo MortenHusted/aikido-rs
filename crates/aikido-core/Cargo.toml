@@ -1,0 +1,27 @@
+[package]
+name = "aikido-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared Aikido Security API client: auth, token store, endpoints."
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }

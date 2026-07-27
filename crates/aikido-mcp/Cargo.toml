@@ -1,0 +1,23 @@
+[package]
+name = "aikido-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aikido Security MCP server over the shared aikido-core client."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "aikido-mcp"
+path = "src/main.rs"
+
+[dependencies]
+aikido-core = { path = "../aikido-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
+schemars = "1"

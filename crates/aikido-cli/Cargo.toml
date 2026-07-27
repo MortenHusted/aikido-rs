@@ -1,0 +1,37 @@
+[package]
+name = "aikido-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aikido Security CLI — issues, repos, and containers from the terminal."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "aikido"
+path = "src/main.rs"
+
+[lib]
+name = "aikido_cli"
+path = "src/lib.rs"
+
+[dependencies]
+aikido-core = { path = "../aikido-core" }
+anyhow.workspace = true
+thiserror.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+jaq-core = "3"
+jaq-std = "3"
+jaq-json = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile.workspace = true
+wiremock.workspace = true
