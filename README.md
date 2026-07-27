@@ -52,6 +52,12 @@ plaintext fallback at `~/.config/aikido/credentials.json` (mode 0600). The
 stored format is identical to the Go CLI's — including go-keyring's payload
 encoding — so existing logins keep working, in both directions.
 
+On Linux the OS keychain backend is not built — the `keyring` dependency is
+scoped to macOS and Windows, so credentials always live in the 0600 file at
+`~/.config/aikido/credentials.json` and `AIKIDO_TOKEN_STORE=keychain` is
+rejected. This is deliberate: Linux secret-service support drags in a D-Bus
+dependency stack for a platform where this CLI runs headless anyway.
+
 > Interop note: the Go CLI's keychain library (zalando/go-keyring) stores
 > every value as `go-keyring-base64:` + base64(JSON), not raw JSON. This CLI
 > decodes that prefix (and the legacy `go-keyring-encoded:` hex prefix) on

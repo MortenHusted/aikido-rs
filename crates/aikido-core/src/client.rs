@@ -265,7 +265,7 @@ fn retryable(method: &reqwest::Method, status: reqwest::StatusCode) -> bool {
         429 => true,
         // Ambiguous whether the origin processed the request — only replay
         // reads.
-        502 | 503 | 504 => *method == reqwest::Method::GET,
+        502..=504 => *method == reqwest::Method::GET,
         _ => false,
     }
 }
