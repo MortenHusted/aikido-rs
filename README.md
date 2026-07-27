@@ -179,4 +179,19 @@ cargo fmt --check
 
 Tests pin the credential store to a temp-dir file backend
 (`AIKIDO_TOKEN_STORE=file`, `AIKIDO_CONFIG_DIR=<tempdir>`) and point
-`AIKIDO_BASE_URL` at a wiremock server.
+`AIKIDO_BASE_URL` at a wiremock server. A default `cargo test` is fully
+non-interactive.
+
+The exception is the two macOS keychain interop tests, which are `#[ignore]`
+because reading a keychain item written by another process pops a modal ACL
+prompt (the test binary's signature changes every rebuild, so the approval
+can never stick). Run them deliberately when touching credential code:
+
+```sh
+cargo test -p aikido-core --test keychain_interop -- --ignored
+```
+
+They use throwaway `aikido-cli-interop-check-*` service names and clean up
+after themselves; the go-keyring payload codec they guard is also covered by
+always-on unit tests. This is the one code path where a default `cargo test`
+is not full coverage.

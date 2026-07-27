@@ -57,6 +57,16 @@ fn decode_rejects_corrupt_base64() {
 // ---------------------------------------------------------------------------
 // End-to-end against the macOS login keychain (throwaway service)
 // ---------------------------------------------------------------------------
+//
+// These two tests are `#[ignore]` and run only via
+// `cargo test -p aikido-core --test keychain_interop -- --ignored`.
+// They touch the real login keychain (throwaway service names, never the
+// real `aikido-cli` entry), and macOS pops a modal ACL prompt when the
+// freshly-built test binary reads an item another process wrote — the test
+// binary's signature changes on every rebuild, so the prompt cannot be
+// pre-approved. A default `cargo test` must never block on a human, so the
+// keychain round-trip is the one code path a default run does not cover;
+// the go-keyring payload codec above carries the regression value.
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -89,6 +99,7 @@ mod macos {
     /// CredentialStore. `-A` keeps the throwaway item prompt-free; the
     /// payload encoding under test is identical either way.
     #[test]
+    #[ignore = "touches the login keychain and can trigger a modal ACL prompt; run with -- --ignored"]
     fn entry_written_like_go_keyring_loads_through_the_store() {
         if !keychain_available() {
             return;
@@ -127,6 +138,7 @@ mod macos {
     /// the security CLI (go-keyring's read path) as the go-keyring-base64
     /// format, decoding to the exact JSON the Go CLI expects.
     #[test]
+    #[ignore = "touches the login keychain and can trigger a modal ACL prompt; run with -- --ignored"]
     fn store_written_entry_is_readable_the_way_go_keyring_reads() {
         if !keychain_available() {
             return;
