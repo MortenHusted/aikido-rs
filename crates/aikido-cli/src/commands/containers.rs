@@ -120,14 +120,13 @@ pub async fn licenses(flags: &GlobalFlags, container_id: u64) -> Result<(), ApiE
     super::repos::render_licenses(flags, packages)
 }
 
-/// Unix-second field rendered as yyyy-mm-dd; the API uses -1 for
-/// never/unknown.
+/// Unix-second field rendered as a local-time yyyy-mm-dd date; the API uses
+/// -1 for never/unknown.
 fn epoch_date(item: &Value, key: &str) -> String {
     item.get(key)
         .and_then(Value::as_i64)
         .filter(|ts| *ts > 0)
-        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
-        .map(|t| t.format("%Y-%m-%d").to_string())
+        .and_then(crate::output::local_date_from_epoch)
         .unwrap_or_else(|| "never".to_string())
 }
 

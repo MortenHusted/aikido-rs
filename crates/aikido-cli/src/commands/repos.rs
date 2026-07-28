@@ -111,16 +111,19 @@ pub fn format_license_line(item: &Value) -> String {
 }
 
 /// `last_scan_at` arrives as a unix timestamp or a date string; render as
-/// yyyy-mm-dd.
+/// yyyy-mm-dd in local time (see `output::local_date_from_epoch`).
 fn format_last_scan(value: Option<&Value>) -> String {
     match value {
         Some(Value::Number(n)) => n
             .as_i64()
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
-            .map(|t| t.format("%Y-%m-%d").to_string())
+            .and_then(crate::output::local_date_from_epoch)
             .unwrap_or_default(),
         Some(Value::String(s)) => chrono::DateTime::parse_from_rfc3339(s)
-            .map(|t| t.format("%Y-%m-%d").to_string())
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
             .unwrap_or_else(|_| s.clone()),
         _ => String::new(),
     }

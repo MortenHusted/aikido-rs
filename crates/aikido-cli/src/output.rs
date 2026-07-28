@@ -258,6 +258,26 @@ pub fn severity_badge(severity: &str) -> String {
     format!("\x1b[{bg};{fg};1m{label}\x1b[0m")
 }
 
+/// Render a unix-second timestamp as a `yyyy-mm-dd` date in the operator's
+/// local timezone. Human-facing dates exist so a person can eyeball "scanned
+/// yesterday, pushed today" — a UTC date silently shifts a calendar day near
+/// midnight, which is exactly the wrong property for that comparison. All
+/// timestamp-to-date rendering in this CLI goes through here so it can never
+/// mix zones.
+pub fn local_date_from_epoch(ts: i64) -> Option<String> {
+    date_in_zone(ts, &chrono::Local)
+}
+
+/// Zone-parametrised core, so tests can pin the conversion against a fixed
+/// offset instead of depending on the machine's zone.
+pub fn date_in_zone<Tz: chrono::TimeZone>(ts: i64, tz: &Tz) -> Option<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let utc = chrono::DateTime::from_timestamp(ts, 0)?;
+    Some(utc.with_timezone(tz).format("%Y-%m-%d").to_string())
+}
+
 /// Ordered key/value lines for a detail view.
 pub fn detail_lines(pairs: &[(&str, String)]) -> String {
     let lines: Vec<String> = pairs
@@ -265,4 +285,35 @@ pub fn detail_lines(pairs: &[(&str, String)]) -> String {
         .map(|(label, value)| format!("{:<14} {}", format!("{label}:"), value))
         .collect();
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::*;
+
+    /// 2026-07-27T23:47:21Z — 27th in UTC, already the 28th anywhere east
+    /// of UTC+13m. Pins that rendering follows the target zone's calendar
+    /// day, not UTC's, using fixed offsets so the test never depends on the
+    /// machine's zone.
+    const NEAR_MIDNIGHT_UTC: i64 = 1_785_196_041;
+
+    #[test]
+    fn date_follows_the_zone_across_the_midnight_boundary() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let copenhagen_summer = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
+        assert_eq!(date_in_zone(NEAR_MIDNIGHT_UTC, &utc).unwrap(), "2026-07-27");
+        assert_eq!(
+            date_in_zone(NEAR_MIDNIGHT_UTC, &copenhagen_summer).unwrap(),
+            "2026-07-28",
+            "an event three hours apart must not read as a day apart"
+        );
+    }
+
+    #[test]
+    fn local_date_matches_the_local_zone_rendering() {
+        // Whatever the machine's zone is, the public helper must agree with
+        // the zone-parametrised core for that same zone.
+        let expected = date_in_zone(NEAR_MIDNIGHT_UTC, &chrono::Local);
+        assert_eq!(local_date_from_epoch(NEAR_MIDNIGHT_UTC), expected);
+    }
 }

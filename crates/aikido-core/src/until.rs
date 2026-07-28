@@ -2,7 +2,9 @@
 //! Shared by the CLI's `--until` flag and the MCP snooze tool.
 
 /// Parse `7d`-style durations. Returns `(unix_timestamp, yyyy-mm-dd)` for
-/// now + N days.
+/// now + N days. The date is rendered in local time, like every other
+/// human-facing date in this workspace — the timestamp sent to the API is
+/// zone-independent.
 pub fn parse_days(input: &str) -> Result<(i64, String), String> {
     let trimmed = input.trim();
     let days: i64 = trimmed
@@ -14,7 +16,11 @@ pub fn parse_days(input: &str) -> Result<(i64, String), String> {
         return Err("expected a positive number of days".to_string());
     }
     let expiry = chrono::Utc::now() + chrono::Duration::days(days);
-    Ok((expiry.timestamp(), expiry.format("%Y-%m-%d").to_string()))
+    let local_date = expiry
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d")
+        .to_string();
+    Ok((expiry.timestamp(), local_date))
 }
 
 #[cfg(test)]
@@ -26,7 +32,13 @@ mod tests {
         let (ts, date) = parse_days("7d").unwrap();
         let expected = chrono::Utc::now() + chrono::Duration::days(7);
         assert!((ts - expected.timestamp()).abs() < 5);
-        assert_eq!(date, expected.format("%Y-%m-%d").to_string());
+        assert_eq!(
+            date,
+            expected
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
+        );
     }
 
     #[test]

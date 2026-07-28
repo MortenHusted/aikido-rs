@@ -1106,11 +1106,13 @@ async fn containers_list_shows_scan_freshness_in_the_table() {
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
 
+    // Pin the subprocess zone so the expected date is deterministic.
     let expected_date = chrono::DateTime::from_timestamp(now - 86_400, 0)
         .unwrap()
         .format("%Y-%m-%d")
         .to_string();
     aikido(&server, dir.path())
+        .env("TZ", "UTC")
         .args(["containers", "list", "--md"])
         .assert()
         .success()
@@ -1119,6 +1121,39 @@ async fn containers_list_shows_scan_freshness_in_the_table() {
         ))
         .stdout(predicate::str::contains(&expected_date))
         .stdout(predicate::str::contains("never"));
+}
+
+/// Derived dates render in the operator's local zone, pinned via the TZ env
+/// var on the subprocess so the test is deterministic on any machine:
+/// 1785196041 is 2026-07-27 23:47 UTC but already 2026-07-28 in Copenhagen.
+#[tokio::test]
+async fn derived_dates_render_in_the_local_zone_not_utc() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/containers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 1, "name": "registry/crm", "tag": "latest", "provider": "ecr",
+              "is_active": true, "last_scanned_at": 1_785_196_041i64, "last_pushed_at": -1 }
+        ])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    aikido(&server, dir.path())
+        .env("TZ", "Europe/Copenhagen")
+        .args(["containers", "list", "--md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2026-07-28"));
+
+    aikido(&server, dir.path())
+        .env("TZ", "UTC")
+        .args(["containers", "list", "--md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2026-07-27"));
 }
 
 #[tokio::test]
