@@ -2,7 +2,9 @@
 //!
 //! The keyring entry (`service: aikido-cli`, `user: default`) holds a JSON
 //! blob `{client_id, client_secret, access_token, expires_at}`; the plaintext
-//! fallback is `~/.config/aikido/credentials.json` with mode 0600. Existing
+//! fallback is `credentials.json` (mode 0600) in the platform config dir —
+//! `~/Library/Application Support/aikido/` on macOS, `~/.config/aikido/` on
+//! Linux (`dirs::config_dir()`, matching Go's `os.UserConfigDir`). Existing
 //! credentials written by the Go CLI keep working unchanged.
 //!
 //! Backend selection (so tests never touch the real keychain):

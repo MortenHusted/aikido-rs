@@ -62,13 +62,17 @@ aikido auth logout
 
 Credentials (client id, client secret, current access token, expiry) are
 stored in the OS keychain under service `aikido-cli` (user `default`), with a
-plaintext fallback at `~/.config/aikido/credentials.json` (mode 0600). The
+plaintext fallback at `credentials.json` (mode 0600) in the platform config
+dir — `~/Library/Application Support/aikido/` on macOS,
+`~/.config/aikido/` on Linux; override with `AIKIDO_CONFIG_DIR`. (The Go
+CLI resolves the same platform paths via `os.UserConfigDir`.) The
 stored format is identical to the Go CLI's — including go-keyring's payload
 encoding — so existing logins keep working, in both directions.
 
 On Linux the OS keychain backend is not built — the `keyring` dependency is
 scoped to macOS and Windows, so credentials always live in the 0600 file at
-`~/.config/aikido/credentials.json` and `AIKIDO_TOKEN_STORE=keychain` is
+`~/.config/aikido/credentials.json` (the platform config dir on Linux) and
+`AIKIDO_TOKEN_STORE=keychain` is
 rejected. This is deliberate: Linux secret-service support drags in a D-Bus
 dependency stack for a platform where this CLI runs headless anyway.
 
@@ -85,7 +89,7 @@ Environment variables:
 | `AIKIDO_TOKEN` | Access-token override (wins over the store) |
 | `AIKIDO_CLIENT_ID` / `AIKIDO_CLIENT_SECRET` | OAuth client credentials (win over stored ones) |
 | `AIKIDO_TOKEN_STORE` | `file` or `keychain`; default: keychain with file fallback |
-| `AIKIDO_CONFIG_DIR` | Config dir override (default `~/.config/aikido`) |
+| `AIKIDO_CONFIG_DIR` | Config dir override (default: platform config dir — `~/Library/Application Support/aikido` on macOS, `~/.config/aikido` on Linux) |
 | `AIKIDO_BASE_URL` | API base override (tests/dev; default `https://app.aikido.dev`) |
 
 Auth semantics — deliberate fixes over the Go CLI:

@@ -25,7 +25,9 @@ use aikido_core::error::ApiError;
     about = "Aikido Security CLI",
     long_about = "A command-line interface for the Aikido Security API.\n\n\
         Credentials: `aikido auth login` (stored in the OS keychain, service \
-        'aikido-cli', or ~/.config/aikido/credentials.json), or the env vars \
+        'aikido-cli', or credentials.json in the platform config dir — \
+        ~/Library/Application Support/aikido on macOS, ~/.config/aikido on \
+        Linux; override with AIKIDO_CONFIG_DIR), or the env vars \
         AIKIDO_TOKEN / AIKIDO_CLIENT_ID / AIKIDO_CLIENT_SECRET."
 )]
 struct Cli {
