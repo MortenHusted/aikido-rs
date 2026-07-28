@@ -45,6 +45,46 @@ pub async fn list_issues(
     Ok(issues)
 }
 
+/// Filters for `GET /issues/counts` — every filter the spec documents.
+#[derive(Debug, Clone, Default)]
+pub struct CountFilters {
+    pub code_repo_id: Option<u64>,
+    pub external_code_repo_id: Option<String>,
+    pub code_repo_name: Option<String>,
+    pub container_repo_id: Option<u64>,
+    pub team_id: Option<u64>,
+    /// Unix seconds; only issues created after this are counted.
+    pub since_timestamp: Option<i64>,
+}
+
+/// `GET /issues/counts` — severity-bucketed counts on BOTH axes:
+/// `issue_groups` (the unit behind the Aikido dashboard's "Open Issues"
+/// figure) and `issues` (individual findings, the rows `/issues/export`
+/// returns). Same data, different units — callers must never compare one
+/// axis to the other.
+pub async fn issue_counts(client: &Client, filters: &CountFilters) -> Result<Value, ApiError> {
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(id) = filters.code_repo_id {
+        query.push(("filter_code_repo_id", id.to_string()));
+    }
+    if let Some(id) = &filters.external_code_repo_id {
+        query.push(("filter_external_code_repo_id", id.clone()));
+    }
+    if let Some(name) = &filters.code_repo_name {
+        query.push(("filter_code_repo_name", name.clone()));
+    }
+    if let Some(id) = filters.container_repo_id {
+        query.push(("filter_container_repo_id", id.to_string()));
+    }
+    if let Some(id) = filters.team_id {
+        query.push(("filter_team_id", id.to_string()));
+    }
+    if let Some(ts) = filters.since_timestamp {
+        query.push(("since_timestamp", ts.to_string()));
+    }
+    client.get("/issues/counts", &query).await
+}
+
 /// `GET /issues/groups/{group_id}`.
 pub async fn get_issue_group(client: &Client, group_id: u64) -> Result<Value, ApiError> {
     client.get(&format!("/issues/groups/{group_id}"), &[]).await

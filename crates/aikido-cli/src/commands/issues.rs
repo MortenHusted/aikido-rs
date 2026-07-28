@@ -110,6 +110,99 @@ pub async fn severity(
     )
 }
 
+/// `issues counts` — severity counts on both axes. The whole point of this
+/// command is that "issue groups" (the Aikido dashboard's "Open Issues"
+/// unit) and "individual issues" (the rows `issues list` returns) are
+/// different units that people conflate, so every output format names the
+/// axis in words.
+pub async fn counts(
+    flags: &GlobalFlags,
+    filters: &aikido_core::api::CountFilters,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    let counts = api::issue_counts(&session.client, filters).await?;
+
+    let groups_all = axis_count(&counts, "issue_groups");
+    let issues_all = axis_count(&counts, "issues");
+    let summary = format!(
+        "{groups_all} open issue groups (the dashboard's \"Open Issues\" unit) \
+         spanning {issues_all} individual issues (the rows `issues list` returns)"
+    );
+
+    match flags.format() {
+        Format::Markdown => {
+            println!("| Unit | All | Critical | High | Medium | Low |");
+            println!("|---|---|---|---|---|---|");
+            println!(
+                "{}",
+                counts_row(
+                    &counts,
+                    "issue_groups",
+                    "Issue groups — the Aikido dashboard's \"Open Issues\" number"
+                )
+            );
+            println!(
+                "{}",
+                counts_row(
+                    &counts,
+                    "issues",
+                    "Individual issues — the rows `issues list` / `/issues/export` return"
+                )
+            );
+            println!("\n{summary}");
+            Ok(())
+        }
+        Format::Styled => {
+            println!(
+                "{}",
+                styled_axis(
+                    &counts,
+                    "issue_groups",
+                    "Issue groups (dashboard \"Open Issues\" unit)"
+                )
+            );
+            println!(
+                "{}",
+                styled_axis(
+                    &counts,
+                    "issues",
+                    "Individual issues (issues list rows)      "
+                )
+            );
+            println!("\x1b[2m{summary}\x1b[0m");
+            Ok(())
+        }
+        format => render_ok(
+            &format,
+            Response::new(counts).with_summary(summary),
+            &[],
+            None,
+        )
+        .map_err(render_failure),
+    }
+}
+
+fn axis_count(counts: &Value, axis: &str) -> i64 {
+    counts[axis]["all"].as_i64().unwrap_or(0)
+}
+
+fn severity_cells(counts: &Value, axis: &str) -> [i64; 5] {
+    ["all", "critical", "high", "medium", "low"]
+        .map(|severity| counts[axis][severity].as_i64().unwrap_or(0))
+}
+
+fn counts_row(counts: &Value, axis: &str, label: &str) -> String {
+    let [all, critical, high, medium, low] = severity_cells(counts, axis);
+    format!("| {label} | {all} | {critical} | {high} | {medium} | {low} |")
+}
+
+fn styled_axis(counts: &Value, axis: &str, label: &str) -> String {
+    let [all, critical, high, medium, low] = severity_cells(counts, axis);
+    format!(
+        "{label}  all {all:>5}   critical {critical:>4}   high {high:>4}   medium {medium:>4}   low {low:>4}"
+    )
+}
+
 /// Mutation success: a summary-only envelope on stdout in machine formats,
 /// a human line on stderr for the TTY.
 pub fn mutation_done(flags: &GlobalFlags, summary: String) -> Result<(), ApiError> {

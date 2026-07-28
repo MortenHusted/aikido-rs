@@ -142,6 +142,30 @@ enum IssuesCommand {
         #[arg(long)]
         container: Option<String>,
     },
+    /// Severity counts on both axes: issue groups (the dashboard's "Open
+    /// Issues" unit) and individual issues (the rows `issues list` returns).
+    /// These are different units — this command exists to keep them apart.
+    Counts {
+        /// Filter by code repository name
+        #[arg(long)]
+        repo: Option<String>,
+        /// Filter by Aikido code repository id
+        #[arg(long)]
+        repo_id: Option<u64>,
+        /// Filter by the provider's repository id
+        #[arg(long)]
+        external_repo_id: Option<String>,
+        /// Filter by container repository id
+        #[arg(long)]
+        container_id: Option<u64>,
+        /// Filter by team id
+        #[arg(long)]
+        team_id: Option<u64>,
+        /// Only count issues created after this: '7d' (last 7 days) or a
+        /// unix-seconds timestamp
+        #[arg(long)]
+        since: Option<String>,
+    },
     /// Show details for a specific issue group
     Show { group_id: u64 },
     /// Ignore a security issue (audited, reversible)
@@ -266,6 +290,32 @@ async fn run(command: Command, flags: &GlobalFlags) -> Result<(), ApiError> {
                 repo,
                 container,
             } => issues::list(flags, severity, Some(status), limit, repo, container).await,
+            IssuesCommand::Counts {
+                repo,
+                repo_id,
+                external_repo_id,
+                container_id,
+                team_id,
+                since,
+            } => {
+                let since_timestamp = since
+                    .as_deref()
+                    .map(aikido_core::until::parse_since)
+                    .transpose()
+                    .map_err(|msg| ApiError::Api {
+                        status: 400,
+                        message: format!("invalid --since value: {msg}"),
+                    })?;
+                let filters = aikido_core::api::CountFilters {
+                    code_repo_id: repo_id,
+                    external_code_repo_id: external_repo_id,
+                    code_repo_name: repo,
+                    container_repo_id: container_id,
+                    team_id,
+                    since_timestamp,
+                };
+                issues::counts(flags, &filters).await
+            }
             IssuesCommand::Show { group_id } => issues::show(flags, group_id).await,
             IssuesCommand::Ignore { issue_id, reason } => {
                 issues::ignore(flags, issue_id, reason).await

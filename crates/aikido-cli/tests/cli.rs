@@ -206,6 +206,118 @@ async fn md_renders_a_table_with_summary() {
 }
 
 // ---------------------------------------------------------------------------
+// issues counts — two axes that must never blur
+// ---------------------------------------------------------------------------
+
+fn counts_body() -> Value {
+    json!({
+        "issue_groups": { "all": 25, "critical": 3, "high": 12, "medium": 7, "low": 3 },
+        "issues": { "all": 168, "critical": 5, "high": 35, "medium": 52, "low": 76 }
+    })
+}
+
+#[tokio::test]
+async fn issues_counts_json_passes_raw_data_and_names_both_axes_in_summary() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/counts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(counts_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["issues", "counts", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    // Raw API payload untouched.
+    assert_eq!(envelope["data"], counts_body());
+    // The summary states both units in words — the ambiguity this command
+    // exists to kill.
+    let summary = envelope["summary"].as_str().unwrap();
+    assert!(summary.contains("25 open issue groups"), "{summary}");
+    assert!(summary.contains("dashboard"), "{summary}");
+    assert!(summary.contains("168 individual issues"), "{summary}");
+}
+
+#[tokio::test]
+async fn issues_counts_md_labels_each_axis_in_words() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/counts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(counts_body()))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    aikido(&server, dir.path())
+        .args(["issues", "counts", "--md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "| Unit | All | Critical | High | Medium | Low |",
+        ))
+        .stdout(predicate::str::contains(
+            "Issue groups — the Aikido dashboard's \"Open Issues\" number | 25 | 3 | 12 | 7 | 3 |",
+        ))
+        .stdout(predicate::str::contains(
+            "Individual issues — the rows `issues list` / `/issues/export` return | 168 | 5 | 35 | 52 | 76 |",
+        ));
+}
+
+#[tokio::test]
+async fn issues_counts_passes_since_and_repo_filters() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/counts"))
+        .and(query_param("filter_code_repo_name", "acme/api"))
+        .and(query_param("since_timestamp", "1750000000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(counts_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    aikido(&server, dir.path())
+        .args([
+            "issues",
+            "counts",
+            "--repo",
+            "acme/api",
+            "--since",
+            "1750000000",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn issues_counts_rejects_bad_since() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["issues", "counts", "--since", "next tuesday", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(envelope["error"].as_str().unwrap().contains("--since"));
+}
+
+// ---------------------------------------------------------------------------
 // Error contract: envelope shape preserved, but stderr + non-zero exit
 // ---------------------------------------------------------------------------
 

@@ -110,6 +110,8 @@ Auth semantics — deliberate fixes over the Go CLI:
 aikido auth login|status|logout
 aikido issues list      [--severity critical,high] [--status open] [--limit 100]
                         [--repo NAME] [--container NAME]
+aikido issues counts    [--repo NAME] [--since 7d|<unix>] [--repo-id N]
+                        [--external-repo-id ID] [--container-id N] [--team-id N]
 aikido issues show <group_id>
 aikido issues ignore <id>   [--reason TEXT]
 aikido issues snooze <id>   --until 7d [--reason TEXT]
@@ -123,6 +125,14 @@ aikido containers scan <id>
 aikido containers licenses <id>
 aikido api get <path>   [--query k=v ...]      # read-only raw passthrough
 ```
+
+Issue counting has two units, and `issues counts` exists to keep them apart:
+**issue groups** are what the Aikido dashboard's "Open Issues" figure counts,
+while **individual issues** are the rows `issues list` / `/issues/export`
+return. One group can contain many issues and can span code repos,
+containers, and clouds. A dashboard showing 26 and a loop reporting 168 can
+both be right — every `issues counts` output names the axis in words so the
+two are never conflated.
 
 Container scan freshness: `containers list` shows Scanned/Pushed dates in
 table output, and `--stale-days N` filters to active containers whose scan
@@ -184,6 +194,7 @@ Tools:
 | Tool | Kind | Description |
 |---|---|---|
 | `aikido_list_issues` | read | List issues (severity/status/repo/container filters, limit) |
+| `aikido_issue_counts` | read | Severity counts on both axes — issue groups (dashboard unit) vs individual issues |
 | `aikido_get_issue_group` | read | Full detail for an issue group |
 | `aikido_ignore_issue` | mutation | Ignore an issue — audited, reversible |
 | `aikido_snooze_issue` | mutation | Snooze an issue for N days (`until: "7d"`) — audited, reversible |

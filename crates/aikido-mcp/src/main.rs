@@ -53,6 +53,21 @@ struct ListIssuesParams {
     container: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+struct IssueCountsParams {
+    /// Filter by code repository name
+    repo: Option<String>,
+    /// Filter by Aikido code repository id
+    repo_id: Option<u64>,
+    /// Filter by container repository id
+    container_id: Option<u64>,
+    /// Filter by team id
+    team_id: Option<u64>,
+    /// Only count issues created after this: "7d" (last 7 days) or a
+    /// unix-seconds timestamp
+    since: Option<String>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct IssueGroupParams {
     /// Issue group id (from list results)
@@ -159,6 +174,35 @@ impl AikidoServer {
             .await
             .map_err(to_error_data)?;
         json_result(&Value::Array(issues))
+    }
+
+    #[tool(
+        name = "aikido_issue_counts",
+        description = "Severity-bucketed counts on BOTH axes: issue_groups is the unit behind the Aikido dashboard's 'Open Issues' figure; issues counts individual findings — the rows aikido_list_issues returns. One group can contain many issues (and can span code repos, containers, and clouds), so the two numbers are different units: never compare a group count to an issue count.",
+        annotations(read_only_hint = true)
+    )]
+    async fn issue_counts(
+        &self,
+        Parameters(params): Parameters<IssueCountsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let since_timestamp = params
+            .since
+            .as_deref()
+            .map(until::parse_since)
+            .transpose()
+            .map_err(|msg| ErrorData::invalid_params(msg, None))?;
+        let filters = api::CountFilters {
+            code_repo_id: params.repo_id,
+            external_code_repo_id: None,
+            code_repo_name: params.repo,
+            container_repo_id: params.container_id,
+            team_id: params.team_id,
+            since_timestamp,
+        };
+        let counts = api::issue_counts(&client()?, &filters)
+            .await
+            .map_err(to_error_data)?;
+        json_result(&counts)
     }
 
     #[tool(

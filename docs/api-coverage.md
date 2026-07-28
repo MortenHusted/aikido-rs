@@ -7,8 +7,8 @@ The spec itself is not committed (~660 KB); regenerate any time with the command
 Every dedicated read route is also reachable ad hoc through `aikido api get <path>`;
 the **CLI** column below lists dedicated commands only.
 
-Totals: **168 operations** across **147 paths**; **13 covered**
-by dedicated commands/tools (12 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
+Totals: **168 operations** across **147 paths**; **14 covered**
+by dedicated commands/tools (13 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
 
 ## access-tokens (0/1 covered)
 
@@ -139,11 +139,11 @@ by dedicated commands/tools (12 in both CLI and MCP, plus `/openapi/spec` via th
 | PUT | `/firewall/apps/{service_id}/blocking` | Update blocking mode | `firewall:write` | — | — |
 | PUT | `/firewall/{app_id}/users/{user_id}` | Update user | `firewall:write` | — | — |
 
-## issues (5/20 covered)
+## issues (6/20 covered)
 
 | Method | Path | Summary | Scope | CLI | MCP |
 |---|---|---|---|---|---|
-| GET | `/issues/counts` | Get issue counts | `issues:read` | — | — |
+| GET | `/issues/counts` | Get issue counts | `issues:read` | `issues counts` | `aikido_issue_counts` |
 | GET | `/issues/detail/bulk` | Get issue details bulk | `issues:read` | — | — |
 | GET | `/issues/export` | Export all issues | `issues:read` | `issues list` | `aikido_list_issues` |
 | GET | `/issues/groups/{issue_group_id}` | Get issue group detail | `issues:read` | `issues show` | `aikido_get_issue_group` |

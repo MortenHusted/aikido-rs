@@ -48,6 +48,37 @@ async fn list_issues_passes_filters_verbatim_and_truncates_client_side() {
 }
 
 #[tokio::test]
+async fn issue_counts_passes_every_documented_filter() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/counts"))
+        .and(query_param("filter_code_repo_name", "acme/api"))
+        .and(query_param("filter_container_repo_id", "9"))
+        .and(query_param("filter_team_id", "4"))
+        .and(query_param("since_timestamp", "1750000000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issue_groups": { "all": 25, "critical": 3, "high": 12, "medium": 7, "low": 3 },
+            "issues": { "all": 168, "critical": 5, "high": 35, "medium": 52, "low": 76 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    let filters = api::CountFilters {
+        code_repo_id: None,
+        external_code_repo_id: None,
+        code_repo_name: Some("acme/api".into()),
+        container_repo_id: Some(9),
+        team_id: Some(4),
+        since_timestamp: Some(1_750_000_000),
+    };
+    let counts = api::issue_counts(&client, &filters).await.unwrap();
+    assert_eq!(counts["issue_groups"]["all"], 25);
+    assert_eq!(counts["issues"]["all"], 168);
+}
+
+#[tokio::test]
 async fn get_issue_group_hits_the_group_endpoint() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
