@@ -107,7 +107,7 @@ fn tool_json(response: &Value) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn lists_all_thirteen_tools_with_descriptions() {
+async fn lists_all_twenty_one_tools_with_descriptions() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();
     let mut mcp = McpServer::start(&server.uri(), dir.path());
@@ -115,11 +115,19 @@ async fn lists_all_thirteen_tools_with_descriptions() {
     let response = mcp.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = response["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names.len(), 13);
+    assert_eq!(names.len(), 21);
     for expected in [
         "aikido_list_issues",
         "aikido_issue_counts",
         "aikido_get_issue_group",
+        "aikido_list_issue_groups",
+        "aikido_ignore_issue_group",
+        "aikido_snooze_issue_group",
+        "aikido_adjust_group_severity",
+        "aikido_unignore_issue_group",
+        "aikido_unsnooze_issue_group",
+        "aikido_unignore_issue",
+        "aikido_unsnooze_issue",
         "aikido_ignore_issue",
         "aikido_snooze_issue",
         "aikido_adjust_severity",
@@ -141,6 +149,23 @@ async fn lists_all_thirteen_tools_with_descriptions() {
         assert!(
             description.contains("audited") && description.contains("reversible"),
             "{mutating} description must flag the mutation: {description}"
+        );
+    }
+
+    // Group mutations must state they act across every location — an agent
+    // reading only the description must not conclude they are repo-scoped.
+    for group_tool in [
+        "aikido_ignore_issue_group",
+        "aikido_snooze_issue_group",
+        "aikido_adjust_group_severity",
+    ] {
+        let tool = tools.iter().find(|t| t["name"] == group_tool).unwrap();
+        let description = tool["description"].as_str().unwrap();
+        assert!(
+            description.contains("WORKSPACE-WIDE")
+                && description.contains("EVERY repo")
+                && description.contains("NOT scoped to one repo"),
+            "{group_tool} must state the blast radius: {description}"
         );
     }
 }

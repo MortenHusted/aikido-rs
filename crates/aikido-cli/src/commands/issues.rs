@@ -48,6 +48,7 @@ pub async fn list(
         status,
         code_repo_name: repo,
         container_repo_name: container,
+        issue_group_id: None,
     };
     let issues = api::list_issues(&session.client, &filters, Some(limit)).await?;
 
@@ -201,6 +202,250 @@ fn styled_axis(counts: &Value, axis: &str, label: &str) -> String {
     format!(
         "{label}  all {all:>5}   critical {critical:>4}   high {high:>4}   medium {medium:>4}   low {low:>4}"
     )
+}
+
+// ---------------------------------------------------------------------------
+// Issue groups — the dashboard's unit. A group is keyed by the
+// vulnerability and its locations span repos, containers, and clouds, so
+// every group mutation here (1) shows the blast radius before acting and
+// (2) asserts the API's reported per-issue count against it afterwards.
+// A mismatch is an error, not a warning.
+// ---------------------------------------------------------------------------
+
+const GROUP_LIST_COLUMNS: &[Column] = &[
+    Column {
+        header: "ID",
+        key: "id",
+    },
+    Column {
+        header: "Severity",
+        key: "severity",
+    },
+    Column {
+        header: "Title",
+        key: "title",
+    },
+    Column {
+        header: "Status",
+        key: "group_status",
+    },
+];
+
+pub async fn groups_list(
+    flags: &GlobalFlags,
+    filters: &api::GroupFilters,
+    limit: usize,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    let groups = api::list_open_issue_groups(&session.client, filters, limit).await?;
+
+    let count = groups.len();
+    let scope_note = if filters.code_repo_id.is_some()
+        || filters.external_code_repo_id.is_some()
+        || filters.code_repo_name.is_some()
+        || filters.container_repo_id.is_some()
+    {
+        " touching the filtered location (groups may also span other repos, containers, and clouds)"
+    } else {
+        ""
+    };
+    let resp = Response::new(Value::Array(groups))
+        .with_summary(format!("{count} issue groups{scope_note}"))
+        .with_count(count);
+    render_ok(
+        &flags.format(),
+        resp,
+        GROUP_LIST_COLUMNS,
+        Some(&format_group_line),
+    )
+    .map_err(render_failure)
+}
+
+fn format_group_line(item: &Value) -> String {
+    let locations = item
+        .get("locations")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    format!(
+        "{}  {:>10}  {:<55}  {:<10}  {} locations",
+        severity_badge(&str_val(item, "severity")),
+        str_val(item, "id"),
+        str_val(item, "title"),
+        str_val(item, "group_status"),
+        locations,
+    )
+}
+
+/// Show what a group mutation is about to touch. Styled mode prints it to
+/// stderr *before* acting; machine formats carry the same facts in the
+/// final envelope.
+fn announce_blast_radius(flags: &GlobalFlags, group_id: u64, blast: &api::GroupBlastRadius) {
+    if flags.format() != Format::Styled {
+        return;
+    }
+    eprintln!(
+        "Group {group_id}: this acts on the vulnerability across ALL its locations, \
+         not just one repo:"
+    );
+    for location in &blast.locations {
+        eprintln!(
+            "  - {} ({})",
+            str_val(location, "name"),
+            str_val(location, "type")
+        );
+    }
+    eprintln!(
+        "Open issues expected to be affected: {}",
+        blast.expected_issues
+    );
+}
+
+/// Wrap up a group mutation: assert the API's reported per-issue count
+/// against the preflight expectation (when the API reports one), then
+/// render locations + counts so the blast radius is on the record.
+fn finish_group_mutation(
+    flags: &GlobalFlags,
+    group_id: u64,
+    blast: api::GroupBlastRadius,
+    affected: Option<u64>,
+    verb: &str,
+) -> Result<(), ApiError> {
+    if let Some(actual) = affected {
+        if actual as usize != blast.expected_issues {
+            return Err(ApiError::Api {
+                status: 0,
+                message: format!(
+                    "group {group_id} {verb} affected {actual} issues but {expected} open issues \
+                     were expected at preflight. THE MUTATION WAS APPLIED — the group changed \
+                     between preflight and mutation; verify it in the Aikido dashboard",
+                    expected = blast.expected_issues,
+                ),
+            });
+        }
+    }
+
+    let locations = blast.locations.len();
+    let summary = match affected {
+        Some(actual) => {
+            format!("Group {group_id} {verb}: {actual} issues across {locations} locations.")
+        }
+        None => format!(
+            "Group {group_id} {verb} across {locations} locations (~{} open issues; the API \
+             reports no per-issue count for this operation).",
+            blast.expected_issues
+        ),
+    };
+
+    match flags.format() {
+        Format::Styled => {
+            eprintln!("{summary}");
+            Ok(())
+        }
+        format => {
+            let data = serde_json::json!({
+                "group_id": group_id,
+                "locations": blast.locations,
+                "expected_issues": blast.expected_issues,
+                "affected_issues": affected,
+            });
+            render_ok(
+                &format,
+                Response::new(data).with_summary(summary),
+                &[],
+                None,
+            )
+            .map_err(render_failure)
+        }
+    }
+}
+
+pub async fn groups_ignore(
+    flags: &GlobalFlags,
+    group_id: u64,
+    reason: Option<String>,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    let blast = api::group_blast_radius(&session.client, group_id).await?;
+    announce_blast_radius(flags, group_id, &blast);
+    let affected = api::ignore_issue_group(&session.client, group_id, reason.as_deref()).await?;
+    finish_group_mutation(flags, group_id, blast, affected, "ignored")
+}
+
+pub async fn groups_snooze(
+    flags: &GlobalFlags,
+    group_id: u64,
+    until: &str,
+    reason: Option<String>,
+) -> Result<(), ApiError> {
+    let (snooze_until, date) = until::parse_days(until).map_err(|msg| ApiError::Api {
+        status: 400,
+        message: format!("invalid --until value {until:?}: {msg}"),
+    })?;
+    let session = require_session(flags)?;
+    let blast = api::group_blast_radius(&session.client, group_id).await?;
+    announce_blast_radius(flags, group_id, &blast);
+    let affected =
+        api::snooze_issue_group(&session.client, group_id, snooze_until, reason.as_deref()).await?;
+    finish_group_mutation(
+        flags,
+        group_id,
+        blast,
+        affected,
+        &format!("snoozed until {date}"),
+    )
+}
+
+pub async fn groups_severity(
+    flags: &GlobalFlags,
+    group_id: u64,
+    level: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    let blast = api::group_blast_radius(&session.client, group_id).await?;
+    announce_blast_radius(flags, group_id, &blast);
+    api::adjust_group_severity(&session.client, group_id, level, reason).await?;
+    finish_group_mutation(
+        flags,
+        group_id,
+        blast,
+        None,
+        &format!("severity adjusted to {level}"),
+    )
+}
+
+pub async fn groups_unignore(
+    flags: &GlobalFlags,
+    group_id: u64,
+    reason: Option<String>,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    api::unignore_issue_group(&session.client, group_id, reason.as_deref()).await?;
+    mutation_done(flags, format!("Group {group_id} unignored."))
+}
+
+pub async fn groups_unsnooze(flags: &GlobalFlags, group_id: u64) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    api::unsnooze_issue_group(&session.client, group_id).await?;
+    mutation_done(flags, format!("Group {group_id} unsnoozed."))
+}
+
+pub async fn unignore(
+    flags: &GlobalFlags,
+    issue_id: u64,
+    reason: Option<String>,
+    all_tags: bool,
+) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    api::unignore_issue(&session.client, issue_id, reason.as_deref(), all_tags).await?;
+    mutation_done(flags, format!("Issue {issue_id} unignored."))
+}
+
+pub async fn unsnooze(flags: &GlobalFlags, issue_id: u64, all_tags: bool) -> Result<(), ApiError> {
+    let session = require_session(flags)?;
+    api::unsnooze_issue(&session.client, issue_id, all_tags).await?;
+    mutation_done(flags, format!("Issue {issue_id} unsnoozed."))
 }
 
 /// Mutation success: a summary-only envelope on stdout in machine formats,

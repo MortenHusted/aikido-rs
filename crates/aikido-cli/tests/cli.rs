@@ -318,6 +318,218 @@ async fn issues_counts_rejects_bad_since() {
 }
 
 // ---------------------------------------------------------------------------
+// issues groups — group-level reads and blast-radius-guarded mutations
+// ---------------------------------------------------------------------------
+
+/// Mounts the two preflight endpoints for group 42: detail (3 locations)
+/// and its open-issue export (`expected` issues).
+async fn mount_group_blast_radius(server: &MockServer, expected: usize) {
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/groups/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "title": "left-pad",
+            "locations": [
+                { "id": 1, "name": "acme/api", "type": "code_repo" },
+                { "id": 2, "name": "acme/web", "type": "code_repo" },
+                { "id": 3, "name": "registry/api", "type": "container_repo" }
+            ]
+        })))
+        .mount(server)
+        .await;
+    let issues: Vec<Value> = (0..expected).map(|i| json!({ "id": i })).collect();
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(query_param("filter_issue_group_id", "42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(issues)))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn groups_list_renders_the_envelope_and_flags_touch_semantics() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/open-issue-groups"))
+        .and(query_param("filter_code_repo_name", "acme/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 42, "severity": "critical", "title": "left-pad", "group_status": "new",
+              "locations": [
+                  { "id": 1, "name": "acme/api", "type": "code_repo" },
+                  { "id": 2, "name": "acme/web", "type": "code_repo" }
+              ]}
+        ])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["issues", "groups", "list", "--repo", "acme/api", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"][0]["id"], 42);
+    // A location-filtered listing must say it returns groups TOUCHING the
+    // filter — the loop's summary must not imply repo-exclusive scope.
+    let summary = envelope["summary"].as_str().unwrap();
+    assert!(summary.contains("touching"), "{summary}");
+    assert!(summary.contains("may also span"), "{summary}");
+}
+
+#[tokio::test]
+async fn groups_ignore_reports_blast_radius_and_matching_amount() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .and(body_json(json!({ "reason": "false positive" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true, "ignored_single_issues_amount": 3
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args([
+            "issues",
+            "groups",
+            "ignore",
+            "42",
+            "--reason",
+            "false positive",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["group_id"], 42);
+    assert_eq!(envelope["data"]["expected_issues"], 3);
+    assert_eq!(envelope["data"]["affected_issues"], 3);
+    assert_eq!(envelope["data"]["locations"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        envelope["summary"],
+        "Group 42 ignored: 3 issues across 3 locations."
+    );
+}
+
+/// The blast-radius assert: affected != expected is an ERROR, and the error
+/// must say the mutation was applied anyway.
+#[tokio::test]
+async fn groups_ignore_amount_mismatch_is_an_error_that_names_both_numbers() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true, "ignored_single_issues_amount": 7
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["issues", "groups", "ignore", "42", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "mismatch must be an error");
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["ok"], false);
+    let message = envelope["error"].as_str().unwrap();
+    assert!(message.contains('7') && message.contains('3'), "{message}");
+    assert!(
+        message.contains("MUTATION WAS APPLIED"),
+        "must not read as a no-op failure: {message}"
+    );
+}
+
+#[tokio::test]
+async fn groups_severity_carries_expectation_when_api_reports_no_amount() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/issues/groups/42/severity/adjust"))
+        .and(body_json(
+            json!({ "adjusted_severity": "low", "reason": "test env" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args([
+            "issues", "groups", "severity", "42", "--level", "low", "--reason", "test env",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["data"]["affected_issues"], Value::Null);
+    assert!(
+        envelope["summary"]
+            .as_str()
+            .unwrap()
+            .contains("no per-issue count"),
+        "{}",
+        envelope["summary"]
+    );
+}
+
+#[tokio::test]
+async fn undo_verbs_work_at_both_levels() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/unignore"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/7/unsnooze"))
+        .and(body_json(json!({ "apply_for_all_tags": true })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    aikido(&server, dir.path())
+        .args(["issues", "groups", "unignore", "42", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Group 42 unignored."));
+
+    aikido(&server, dir.path())
+        .args(["issues", "unsnooze", "7", "--all-tags", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Issue 7 unsnoozed."));
+}
+
+// ---------------------------------------------------------------------------
 // Error contract: envelope shape preserved, but stderr + non-zero exit
 // ---------------------------------------------------------------------------
 

@@ -7,8 +7,8 @@ The spec itself is not committed (~660 KB); regenerate any time with the command
 Every dedicated read route is also reachable ad hoc through `aikido api get <path>`;
 the **CLI** column below lists dedicated commands only.
 
-Totals: **168 operations** across **147 paths**; **14 covered**
-by dedicated commands/tools (13 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
+Totals: **168 operations** across **147 paths**; **22 covered**
+by dedicated commands/tools (21 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
 
 ## access-tokens (0/1 covered)
 
@@ -139,7 +139,7 @@ by dedicated commands/tools (13 in both CLI and MCP, plus `/openapi/spec` via th
 | PUT | `/firewall/apps/{service_id}/blocking` | Update blocking mode | `firewall:write` | — | — |
 | PUT | `/firewall/{app_id}/users/{user_id}` | Update user | `firewall:write` | — | — |
 
-## issues (6/20 covered)
+## issues (13/20 covered)
 
 | Method | Path | Summary | Scope | CLI | MCP |
 |---|---|---|---|---|---|
@@ -147,22 +147,22 @@ by dedicated commands/tools (13 in both CLI and MCP, plus `/openapi/spec` via th
 | GET | `/issues/detail/bulk` | Get issue details bulk | `issues:read` | — | — |
 | GET | `/issues/export` | Export all issues | `issues:read` | `issues list` | `aikido_list_issues` |
 | GET | `/issues/groups/{issue_group_id}` | Get issue group detail | `issues:read` | `issues show` | `aikido_get_issue_group` |
-| PUT | `/issues/groups/{issue_group_id}/ignore` | Ignore an issue group | `issues:write` | — | — |
+| PUT | `/issues/groups/{issue_group_id}/ignore` | Ignore an issue group | `issues:write` | `issues groups ignore` | `aikido_ignore_issue_group` |
 | GET | `/issues/groups/{issue_group_id}/notes` | List notes for issue group | `issues:read` | — | — |
 | POST | `/issues/groups/{issue_group_id}/notes` | Add note to issue group | `issues:write` | — | — |
-| POST | `/issues/groups/{issue_group_id}/severity/adjust` | Adjust severity of an issue group | `issues:write` | — | — |
-| PUT | `/issues/groups/{issue_group_id}/snooze` | Snooze an issue group | `issues:write` | — | — |
+| POST | `/issues/groups/{issue_group_id}/severity/adjust` | Adjust severity of an issue group | `issues:write` | `issues groups severity` | `aikido_adjust_group_severity` |
+| PUT | `/issues/groups/{issue_group_id}/snooze` | Snooze an issue group | `issues:write` | `issues groups snooze` | `aikido_snooze_issue_group` |
 | GET | `/issues/groups/{issue_group_id}/tasks` | Get issue group tasks | `issues:read` | — | — |
-| PUT | `/issues/groups/{issue_group_id}/unignore` | Unignore an issue group | `issues:write` | — | — |
-| PUT | `/issues/groups/{issue_group_id}/unsnooze` | Unsnooze an issue group | `issues:write` | — | — |
+| PUT | `/issues/groups/{issue_group_id}/unignore` | Unignore an issue group | `issues:write` | `issues groups unignore` | `aikido_unignore_issue_group` |
+| PUT | `/issues/groups/{issue_group_id}/unsnooze` | Unsnooze an issue group | `issues:write` | `issues groups unsnooze` | `aikido_unsnooze_issue_group` |
 | GET | `/issues/{issue_id}` | Get issue detail | `issues:read` | — | — |
 | PUT | `/issues/{issue_id}/ignore` | Ignore an issue | `issues:write` | `issues ignore` | `aikido_ignore_issue` |
 | GET | `/issues/{issue_id}/reachability` | Get issue reachability | `issues:read` | — | — |
 | POST | `/issues/{issue_id}/severity/adjust` | Adjust severity of an issue | `issues:write` | `issues severity` | `aikido_adjust_severity` |
 | PUT | `/issues/{issue_id}/snooze` | Snooze an issue | `issues:write` | `issues snooze` | `aikido_snooze_issue` |
 | PUT | `/issues/{issue_id}/solve` | Solve an issue | `issues:write` | — | — |
-| PUT | `/issues/{issue_id}/unignore` | Unignore an issue | `issues:write` | — | — |
-| PUT | `/issues/{issue_id}/unsnooze` | Unsnooze an issue | `issues:write` | — | — |
+| PUT | `/issues/{issue_id}/unignore` | Unignore an issue | `issues:write` | `issues unignore` | `aikido_unignore_issue` |
+| PUT | `/issues/{issue_id}/unsnooze` | Unsnooze an issue | `issues:write` | `issues unsnooze` | `aikido_unsnooze_issue` |
 
 ## licenses (0/2 covered)
 
@@ -177,11 +177,11 @@ by dedicated commands/tools (13 in both CLI and MCP, plus `/openapi/spec` via th
 |---|---|---|---|---|---|
 | GET | `/localscan/latest` | Get latest local scanner version | `—` | — | — |
 
-## open-issue-groups (0/1 covered)
+## open-issue-groups (1/1 covered)
 
 | Method | Path | Summary | Scope | CLI | MCP |
 |---|---|---|---|---|---|
-| GET | `/open-issue-groups` | List open issue groups | `issues:read` | — | — |
+| GET | `/open-issue-groups` | List open issue groups | `issues:read` | `issues groups list` | `aikido_list_issue_groups` |
 
 ## openapi (1/1 covered)
 

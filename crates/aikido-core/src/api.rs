@@ -15,6 +15,7 @@ pub struct IssueFilters {
     pub status: Option<String>,
     pub code_repo_name: Option<String>,
     pub container_repo_name: Option<String>,
+    pub issue_group_id: Option<u64>,
 }
 
 /// `GET /issues/export`, truncated client-side to `limit` when given.
@@ -35,6 +36,9 @@ pub async fn list_issues(
     }
     if let Some(container) = &filters.container_repo_name {
         query.push(("filter_container_repo_name", container.clone()));
+    }
+    if let Some(group_id) = filters.issue_group_id {
+        query.push(("filter_issue_group_id", group_id.to_string()));
     }
 
     let raw = client.get("/issues/export", &query).await?;
@@ -135,6 +139,214 @@ pub async fn adjust_severity(
             &format!("/issues/{issue_id}/severity/adjust"),
             json!({ "adjusted_severity": level, "reason": reason }),
         )
+        .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Issue groups
+//
+// A group is keyed by the vulnerability, not by where it appears: its
+// `locations` span code repos, containers, and clouds (the spec documents
+// this explicitly, and in practice most groups span several). Group-level
+// mutations therefore act workspace-wide — every caller must surface that.
+// ---------------------------------------------------------------------------
+
+/// Filters for `GET /open-issue-groups` — every filter the spec documents.
+#[derive(Debug, Clone, Default)]
+pub struct GroupFilters {
+    pub code_repo_id: Option<u64>,
+    pub external_code_repo_id: Option<String>,
+    pub code_repo_name: Option<String>,
+    pub container_repo_id: Option<u64>,
+    pub team_id: Option<u64>,
+    pub issue_type: Option<String>,
+    /// Default is `open` server-side.
+    pub status: Option<String>,
+}
+
+/// `GET /open-issue-groups` — the listing behind the Aikido dashboard's
+/// "Open Issues" number. Note: a location filter (repo/container) returns
+/// groups that *touch* that location; the groups themselves may span other
+/// repos, containers, and clouds.
+pub async fn list_open_issue_groups(
+    client: &Client,
+    filters: &GroupFilters,
+    limit: usize,
+) -> Result<Vec<Value>, ApiError> {
+    let mut base_query: Vec<(&str, String)> = Vec::new();
+    if let Some(id) = filters.code_repo_id {
+        base_query.push(("filter_code_repo_id", id.to_string()));
+    }
+    if let Some(id) = &filters.external_code_repo_id {
+        base_query.push(("filter_external_code_repo_id", id.clone()));
+    }
+    if let Some(name) = &filters.code_repo_name {
+        base_query.push(("filter_code_repo_name", name.clone()));
+    }
+    if let Some(id) = filters.container_repo_id {
+        base_query.push(("filter_container_repo_id", id.to_string()));
+    }
+    if let Some(id) = filters.team_id {
+        base_query.push(("filter_team_id", id.to_string()));
+    }
+    if let Some(issue_type) = &filters.issue_type {
+        base_query.push(("filter_issue_type", issue_type.clone()));
+    }
+    if let Some(status) = &filters.status {
+        base_query.push(("filter_status", status.clone()));
+    }
+    paginate(client, "/open-issue-groups", base_query, limit, 100).await
+}
+
+/// What a group-level mutation will touch: its locations and how many open
+/// issues it currently contains. Computed *before* mutating so callers can
+/// show the blast radius and assert the outcome against it.
+#[derive(Debug, Clone)]
+pub struct GroupBlastRadius {
+    pub locations: Vec<Value>,
+    /// Open issues currently in the group.
+    pub expected_issues: usize,
+}
+
+pub async fn group_blast_radius(
+    client: &Client,
+    group_id: u64,
+) -> Result<GroupBlastRadius, ApiError> {
+    let detail = get_issue_group(client, group_id).await?;
+    let locations = detail
+        .get("locations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let open_issues = list_issues(
+        client,
+        &IssueFilters {
+            status: Some("open".to_string()),
+            issue_group_id: Some(group_id),
+            ..IssueFilters::default()
+        },
+        None,
+    )
+    .await?;
+    Ok(GroupBlastRadius {
+        locations,
+        expected_issues: open_issues.len(),
+    })
+}
+
+/// `PUT /issues/groups/{id}/ignore`. Returns the number of single issues
+/// the API reports as ignored, when it reports one.
+pub async fn ignore_issue_group(
+    client: &Client,
+    group_id: u64,
+    reason: Option<&str>,
+) -> Result<Option<u64>, ApiError> {
+    let mut body = json!({});
+    if let Some(reason) = reason {
+        body["reason"] = json!(reason);
+    }
+    let response = client
+        .put(&format!("/issues/groups/{group_id}/ignore"), body)
+        .await?;
+    Ok(response
+        .get("ignored_single_issues_amount")
+        .and_then(Value::as_u64))
+}
+
+/// `PUT /issues/groups/{id}/snooze`. Returns the number of single issues
+/// the API reports as snoozed, when it reports one.
+pub async fn snooze_issue_group(
+    client: &Client,
+    group_id: u64,
+    snooze_until: i64,
+    reason: Option<&str>,
+) -> Result<Option<u64>, ApiError> {
+    let mut body = json!({ "snooze_until": snooze_until });
+    if let Some(reason) = reason {
+        body["reason"] = json!(reason);
+    }
+    let response = client
+        .put(&format!("/issues/groups/{group_id}/snooze"), body)
+        .await?;
+    Ok(response
+        .get("snoozed_single_issues_amount")
+        .and_then(Value::as_u64))
+}
+
+/// `POST /issues/groups/{id}/severity/adjust`. The API reports no
+/// per-issue count for this one.
+pub async fn adjust_group_severity(
+    client: &Client,
+    group_id: u64,
+    level: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
+    client
+        .post(
+            &format!("/issues/groups/{group_id}/severity/adjust"),
+            json!({ "adjusted_severity": level, "reason": reason }),
+        )
+        .await?;
+    Ok(())
+}
+
+/// `PUT /issues/groups/{id}/unignore`.
+pub async fn unignore_issue_group(
+    client: &Client,
+    group_id: u64,
+    reason: Option<&str>,
+) -> Result<(), ApiError> {
+    let mut body = json!({});
+    if let Some(reason) = reason {
+        body["reason"] = json!(reason);
+    }
+    client
+        .put(&format!("/issues/groups/{group_id}/unignore"), body)
+        .await?;
+    Ok(())
+}
+
+/// `PUT /issues/groups/{id}/unsnooze` — no body.
+pub async fn unsnooze_issue_group(client: &Client, group_id: u64) -> Result<(), ApiError> {
+    client
+        .put(&format!("/issues/groups/{group_id}/unsnooze"), json!({}))
+        .await?;
+    Ok(())
+}
+
+/// `PUT /issues/{id}/unignore`.
+pub async fn unignore_issue(
+    client: &Client,
+    issue_id: u64,
+    reason: Option<&str>,
+    apply_for_all_tags: bool,
+) -> Result<(), ApiError> {
+    let mut body = json!({});
+    if let Some(reason) = reason {
+        body["reason"] = json!(reason);
+    }
+    if apply_for_all_tags {
+        body["apply_for_all_tags"] = json!(true);
+    }
+    client
+        .put(&format!("/issues/{issue_id}/unignore"), body)
+        .await?;
+    Ok(())
+}
+
+/// `PUT /issues/{id}/unsnooze`.
+pub async fn unsnooze_issue(
+    client: &Client,
+    issue_id: u64,
+    apply_for_all_tags: bool,
+) -> Result<(), ApiError> {
+    let mut body = json!({});
+    if apply_for_all_tags {
+        body["apply_for_all_tags"] = json!(true);
+    }
+    client
+        .put(&format!("/issues/{issue_id}/unsnooze"), body)
         .await?;
     Ok(())
 }

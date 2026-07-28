@@ -74,6 +74,76 @@ struct IssueGroupParams {
     group_id: u64,
 }
 
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+struct ListGroupsParams {
+    /// Filter by code repository name (returns groups TOUCHING it; they may span other locations)
+    repo: Option<String>,
+    /// Filter by Aikido code repository id
+    repo_id: Option<u64>,
+    /// Filter by container repository id
+    container_id: Option<u64>,
+    /// Filter by team id
+    team_id: Option<u64>,
+    /// Filter by issue type
+    issue_type: Option<String>,
+    /// Filter by status (server default: open)
+    status: Option<String>,
+    /// Maximum number of groups to return (default: 100)
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GroupIgnoreParams {
+    /// Issue group id
+    group_id: u64,
+    /// Reason (recorded in the audit log)
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GroupSnoozeParams {
+    /// Issue group id
+    group_id: u64,
+    /// Snooze duration in days, e.g. "7d", "30d", "90d"
+    until: String,
+    /// Reason (recorded in the audit log)
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GroupSeverityParams {
+    /// Issue group id
+    group_id: u64,
+    /// New severity level: critical|high|medium|low
+    level: String,
+    /// Reason (recorded in the audit log)
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GroupIdParams {
+    /// Issue group id
+    group_id: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnignoreIssueParams {
+    /// Issue id
+    issue_id: u64,
+    /// Reason for unignoring
+    reason: Option<String>,
+    /// Apply across all tags of the affected image
+    apply_for_all_tags: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnsnoozeIssueParams {
+    /// Issue id
+    issue_id: u64,
+    /// Apply across all tags of the affected image
+    apply_for_all_tags: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct IgnoreIssueParams {
     /// Issue id
@@ -169,6 +239,7 @@ impl AikidoServer {
             status: Some(params.status.unwrap_or_else(|| "open".to_string())),
             code_repo_name: params.repo,
             container_repo_name: params.container,
+            issue_group_id: None,
         };
         let issues = api::list_issues(&client()?, &filters, Some(params.limit.unwrap_or(100)))
             .await
@@ -275,6 +346,210 @@ impl AikidoServer {
         json_result(&json!({
             "ok": true,
             "summary": format!("Issue {} severity adjusted to {}.", params.issue_id, params.level)
+        }))
+    }
+
+    #[tool(
+        name = "aikido_list_issue_groups",
+        description = "List open issue groups — the unit the Aikido dashboard's 'Open Issues' figure counts. Location filters (repo/container) return groups that TOUCH that location; a group is keyed by the vulnerability and its locations may also span other repos, containers, and clouds.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_issue_groups(
+        &self,
+        Parameters(params): Parameters<ListGroupsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let filters = api::GroupFilters {
+            code_repo_id: params.repo_id,
+            external_code_repo_id: None,
+            code_repo_name: params.repo,
+            container_repo_id: params.container_id,
+            team_id: params.team_id,
+            issue_type: params.issue_type,
+            status: params.status,
+        };
+        let groups = api::list_open_issue_groups(&client()?, &filters, params.limit.unwrap_or(100))
+            .await
+            .map_err(to_error_data)?;
+        json_result(&Value::Array(groups))
+    }
+
+    /// Shared tail for group mutations: assert the reported per-issue count
+    /// against the preflight blast radius; a mismatch is an error (the
+    /// mutation HAS been applied — the error says so).
+    fn group_mutation_result(
+        group_id: u64,
+        blast: api::GroupBlastRadius,
+        affected: Option<u64>,
+        verb: &str,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Some(actual) = affected {
+            if actual as usize != blast.expected_issues {
+                return Err(ErrorData::internal_error(
+                    format!(
+                        "group {group_id} {verb} affected {actual} issues but {expected} open \
+                         issues were expected at preflight. THE MUTATION WAS APPLIED — verify \
+                         the group in the Aikido dashboard",
+                        expected = blast.expected_issues
+                    ),
+                    None,
+                ));
+            }
+        }
+        json_result(&json!({
+            "ok": true,
+            "group_id": group_id,
+            "locations": blast.locations,
+            "expected_issues": blast.expected_issues,
+            "affected_issues": affected,
+            "summary": format!("Group {group_id} {verb}."),
+        }))
+    }
+
+    #[tool(
+        name = "aikido_ignore_issue_group",
+        description = "Ignore a whole issue group. WORKSPACE-WIDE: this acts on the vulnerability across EVERY repo, container, and cloud in the group's locations — it is NOT scoped to one repo, even if the group was found via a repo filter. Audited and reversible via aikido_unignore_issue_group. The result reports the locations touched and asserts the affected-issue count against a preflight expectation."
+    )]
+    async fn ignore_issue_group(
+        &self,
+        Parameters(params): Parameters<GroupIgnoreParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let client = client()?;
+        let blast = api::group_blast_radius(&client, params.group_id)
+            .await
+            .map_err(to_error_data)?;
+        let affected = api::ignore_issue_group(&client, params.group_id, params.reason.as_deref())
+            .await
+            .map_err(to_error_data)?;
+        Self::group_mutation_result(params.group_id, blast, affected, "ignored")
+    }
+
+    #[tool(
+        name = "aikido_snooze_issue_group",
+        description = "Snooze a whole issue group for N days (until: \"7d\"). WORKSPACE-WIDE: acts on the vulnerability across EVERY repo, container, and cloud in the group's locations — NOT scoped to one repo. Reversible via aikido_unsnooze_issue_group."
+    )]
+    async fn snooze_issue_group(
+        &self,
+        Parameters(params): Parameters<GroupSnoozeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (snooze_until, date) =
+            until::parse_days(&params.until).map_err(|msg| ErrorData::invalid_params(msg, None))?;
+        let client = client()?;
+        let blast = api::group_blast_radius(&client, params.group_id)
+            .await
+            .map_err(to_error_data)?;
+        let affected = api::snooze_issue_group(
+            &client,
+            params.group_id,
+            snooze_until,
+            params.reason.as_deref(),
+        )
+        .await
+        .map_err(to_error_data)?;
+        Self::group_mutation_result(
+            params.group_id,
+            blast,
+            affected,
+            &format!("snoozed until {date}"),
+        )
+    }
+
+    #[tool(
+        name = "aikido_adjust_group_severity",
+        description = "Adjust a whole issue group's severity. WORKSPACE-WIDE: acts on the vulnerability across EVERY repo, container, and cloud in the group's locations — NOT scoped to one repo. Audited and reversible. The API reports no per-issue count for this operation; the result carries the preflight expectation instead."
+    )]
+    async fn adjust_group_severity(
+        &self,
+        Parameters(params): Parameters<GroupSeverityParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let client = client()?;
+        let blast = api::group_blast_radius(&client, params.group_id)
+            .await
+            .map_err(to_error_data)?;
+        api::adjust_group_severity(&client, params.group_id, &params.level, &params.reason)
+            .await
+            .map_err(to_error_data)?;
+        Self::group_mutation_result(
+            params.group_id,
+            blast,
+            None,
+            &format!("severity adjusted to {}", params.level),
+        )
+    }
+
+    #[tool(
+        name = "aikido_unignore_issue_group",
+        description = "Reverse an ignore on a whole issue group. WORKSPACE-WIDE, like the ignore it reverses."
+    )]
+    async fn unignore_issue_group(
+        &self,
+        Parameters(params): Parameters<GroupIgnoreParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        api::unignore_issue_group(&client()?, params.group_id, params.reason.as_deref())
+            .await
+            .map_err(to_error_data)?;
+        json_result(&json!({
+            "ok": true,
+            "summary": format!("Group {} unignored.", params.group_id)
+        }))
+    }
+
+    #[tool(
+        name = "aikido_unsnooze_issue_group",
+        description = "Reverse a snooze on a whole issue group. WORKSPACE-WIDE, like the snooze it reverses."
+    )]
+    async fn unsnooze_issue_group(
+        &self,
+        Parameters(params): Parameters<GroupIdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        api::unsnooze_issue_group(&client()?, params.group_id)
+            .await
+            .map_err(to_error_data)?;
+        json_result(&json!({
+            "ok": true,
+            "summary": format!("Group {} unsnoozed.", params.group_id)
+        }))
+    }
+
+    #[tool(
+        name = "aikido_unignore_issue",
+        description = "Reverse an ignore on a single issue (one instance, one location — the per-issue counterpart of the group verb)."
+    )]
+    async fn unignore_issue(
+        &self,
+        Parameters(params): Parameters<UnignoreIssueParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        api::unignore_issue(
+            &client()?,
+            params.issue_id,
+            params.reason.as_deref(),
+            params.apply_for_all_tags.unwrap_or(false),
+        )
+        .await
+        .map_err(to_error_data)?;
+        json_result(&json!({
+            "ok": true,
+            "summary": format!("Issue {} unignored.", params.issue_id)
+        }))
+    }
+
+    #[tool(
+        name = "aikido_unsnooze_issue",
+        description = "Reverse a snooze on a single issue (one instance, one location)."
+    )]
+    async fn unsnooze_issue(
+        &self,
+        Parameters(params): Parameters<UnsnoozeIssueParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        api::unsnooze_issue(
+            &client()?,
+            params.issue_id,
+            params.apply_for_all_tags.unwrap_or(false),
+        )
+        .await
+        .map_err(to_error_data)?;
+        json_result(&json!({
+            "ok": true,
+            "summary": format!("Issue {} unsnoozed.", params.issue_id)
         }))
     }
 

@@ -114,8 +114,17 @@ aikido issues counts    [--repo NAME] [--since 7d|<unix>] [--repo-id N]
                         [--external-repo-id ID] [--container-id N] [--team-id N]
 aikido issues show <group_id>
 aikido issues ignore <id>   [--reason TEXT]
+aikido issues unignore <id> [--reason TEXT] [--all-tags]
 aikido issues snooze <id>   --until 7d [--reason TEXT]
+aikido issues unsnooze <id> [--all-tags]
 aikido issues severity <id> --level low --reason TEXT
+aikido issues groups list   [--repo NAME] [--repo-id N] [--container-id N]
+                            [--team-id N] [--type T] [--status S] [--limit 100]
+aikido issues groups ignore <gid>   [--reason TEXT]      # WORKSPACE-WIDE
+aikido issues groups snooze <gid>   --until 7d [--reason] # WORKSPACE-WIDE
+aikido issues groups severity <gid> --level low --reason  # WORKSPACE-WIDE
+aikido issues groups unignore <gid> [--reason TEXT]
+aikido issues groups unsnooze <gid>
 aikido repos list       [--limit 100] [--name NAME] [--inactive]
 aikido repos scan <repo_id> [--sast] [--iac] [--secrets]
 aikido repos licenses <repo_id>
@@ -133,6 +142,17 @@ return. One group can contain many issues and can span code repos,
 containers, and clouds. A dashboard showing 26 and a loop reporting 168 can
 both be right — every `issues counts` output names the axis in words so the
 two are never conflated.
+
+**Group mutations are workspace-wide.** A location filter on
+`issues groups list` returns groups that *touch* that location (verified
+against live data: most groups span several repos/containers), so a group
+mutation acts on the vulnerability across every repo, container, and cloud
+in the group — never just the repo you filtered by. To make that impossible
+to stumble into, every group mutation shows its blast radius (locations +
+expected open-issue count) before acting, and `ignore`/`snooze` assert the
+API's reported affected-issue count against that expectation afterwards — a
+mismatch is an error (the message states the mutation was still applied).
+Per-issue verbs remain the single-instance alternative.
 
 Container scan freshness: `containers list` shows Scanned/Pushed dates in
 table output, and `--stale-days N` filters to active containers whose scan
@@ -196,6 +216,14 @@ Tools:
 | `aikido_list_issues` | read | List issues (severity/status/repo/container filters, limit) |
 | `aikido_issue_counts` | read | Severity counts on both axes — issue groups (dashboard unit) vs individual issues |
 | `aikido_get_issue_group` | read | Full detail for an issue group |
+| `aikido_list_issue_groups` | read | List open issue groups (dashboard listing; location filters are touch-semantics) |
+| `aikido_ignore_issue_group` | mutation | Ignore a whole group — workspace-wide, blast-radius asserted |
+| `aikido_snooze_issue_group` | mutation | Snooze a whole group — workspace-wide, blast-radius asserted |
+| `aikido_adjust_group_severity` | mutation | Adjust a whole group's severity — workspace-wide |
+| `aikido_unignore_issue_group` | mutation | Reverse a group ignore |
+| `aikido_unsnooze_issue_group` | mutation | Reverse a group snooze |
+| `aikido_unignore_issue` | mutation | Reverse an ignore on a single issue |
+| `aikido_unsnooze_issue` | mutation | Reverse a snooze on a single issue |
 | `aikido_ignore_issue` | mutation | Ignore an issue — audited, reversible |
 | `aikido_snooze_issue` | mutation | Snooze an issue for N days (`until: "7d"`) — audited, reversible |
 | `aikido_adjust_severity` | mutation | Adjust issue severity — audited, reversible |

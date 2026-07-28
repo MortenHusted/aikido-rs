@@ -41,6 +41,7 @@ async fn list_issues_passes_filters_verbatim_and_truncates_client_side() {
         status: Some("open".into()),
         code_repo_name: Some("acme/api".into()),
         container_repo_name: None,
+        issue_group_id: None,
     };
     let issues = api::list_issues(&client, &filters, Some(2)).await.unwrap();
     assert_eq!(issues.len(), 2, "limit must truncate client-side");
@@ -94,6 +95,181 @@ async fn get_issue_group_hits_the_group_endpoint() {
     let client = Client::new(server.uri(), "tok");
     let group = api::get_issue_group(&client, 42).await.unwrap();
     assert_eq!(group["title"], "Vulnerable dependency");
+}
+
+// ---------------------------------------------------------------------------
+// Issue groups
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_open_issue_groups_passes_filters_and_paginates() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/open-issue-groups"))
+        .and(query_param("filter_code_repo_name", "acme/api"))
+        .and(query_param("filter_issue_type", "open_source"))
+        .and(query_param("filter_status", "open"))
+        .and(query_param("page", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 1, "severity": "critical", "title": "left-pad", "group_status": "new",
+              "locations": [
+                  { "id": 1, "name": "acme/api", "type": "code_repo" },
+                  { "id": 2, "name": "registry/api", "type": "container_repo" }
+              ]}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    let filters = api::GroupFilters {
+        code_repo_name: Some("acme/api".into()),
+        issue_type: Some("open_source".into()),
+        status: Some("open".into()),
+        ..api::GroupFilters::default()
+    };
+    let groups = api::list_open_issue_groups(&client, &filters, 50)
+        .await
+        .unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["locations"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn group_blast_radius_combines_locations_and_open_issue_count() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/groups/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "title": "left-pad",
+            "locations": [
+                { "id": 1, "name": "acme/api", "type": "code_repo" },
+                { "id": 2, "name": "acme/web", "type": "code_repo" },
+                { "id": 3, "name": "registry/api", "type": "container_repo" }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(query_param("filter_issue_group_id", "42"))
+        .and(query_param("filter_status", "open"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 100 }, { "id": 101 }, { "id": 102 }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    let blast = api::group_blast_radius(&client, 42).await.unwrap();
+    assert_eq!(blast.locations.len(), 3);
+    assert_eq!(blast.expected_issues, 3);
+}
+
+#[tokio::test]
+async fn group_ignore_and_snooze_report_affected_amounts() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .and(body_json(json!({ "reason": "false positive" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true, "ignored_single_issues_amount": 3
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/43/snooze"))
+        .and(body_json(
+            json!({ "snooze_until": 1790000000i64, "reason": "sprint" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true, "snoozed_single_issues_amount": 5
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    assert_eq!(
+        api::ignore_issue_group(&client, 42, Some("false positive"))
+            .await
+            .unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        api::snooze_issue_group(&client, 43, 1_790_000_000, Some("sprint"))
+            .await
+            .unwrap(),
+        Some(5)
+    );
+}
+
+#[tokio::test]
+async fn group_severity_and_undo_verbs_send_the_documented_bodies() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/issues/groups/42/severity/adjust"))
+        .and(body_json(
+            json!({ "adjusted_severity": "low", "reason": "unreachable" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/unignore"))
+        .and(body_json(json!({ "reason": "re-triaging" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/unsnooze"))
+        .and(body_json(json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    api::adjust_group_severity(&client, 42, "low", "unreachable")
+        .await
+        .unwrap();
+    api::unignore_issue_group(&client, 42, Some("re-triaging"))
+        .await
+        .unwrap();
+    api::unsnooze_issue_group(&client, 42).await.unwrap();
+}
+
+#[tokio::test]
+async fn issue_level_undo_verbs_send_apply_for_all_tags_only_when_set() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/7/unignore"))
+        .and(body_json(
+            json!({ "reason": "still relevant", "apply_for_all_tags": true }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/8/unsnooze"))
+        .and(body_json(json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    api::unignore_issue(&client, 7, Some("still relevant"), true)
+        .await
+        .unwrap();
+    api::unsnooze_issue(&client, 8, false).await.unwrap();
 }
 
 #[tokio::test]

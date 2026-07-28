@@ -168,12 +168,36 @@ enum IssuesCommand {
     },
     /// Show details for a specific issue group
     Show { group_id: u64 },
-    /// Ignore a security issue (audited, reversible)
+    /// Issue groups — the unit the Aikido dashboard counts. Group mutations
+    /// act on the vulnerability across EVERY repo, container, and cloud in
+    /// the group, not just one repo.
+    Groups {
+        #[command(subcommand)]
+        command: GroupsCommand,
+    },
+    /// Ignore a security issue (audited, reversible via `issues unignore`)
     Ignore {
         issue_id: u64,
         /// Reason for ignoring the issue
         #[arg(long)]
         reason: Option<String>,
+    },
+    /// Reverse an ignore on a single issue
+    Unignore {
+        issue_id: u64,
+        /// Reason for unignoring
+        #[arg(long)]
+        reason: Option<String>,
+        /// Apply across all tags of the affected image
+        #[arg(long)]
+        all_tags: bool,
+    },
+    /// Reverse a snooze on a single issue
+    Unsnooze {
+        issue_id: u64,
+        /// Apply across all tags of the affected image
+        #[arg(long)]
+        all_tags: bool,
     },
     /// Snooze a security issue until a future date
     Snooze {
@@ -195,6 +219,78 @@ enum IssuesCommand {
         #[arg(long)]
         reason: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum GroupsCommand {
+    /// List open issue groups (the dashboard's "Open Issues" listing).
+    /// Location filters return groups that TOUCH the location — results may
+    /// span other repos, containers, and clouds.
+    List {
+        /// Filter by code repository name (groups touching it)
+        #[arg(long)]
+        repo: Option<String>,
+        /// Filter by Aikido code repository id
+        #[arg(long)]
+        repo_id: Option<u64>,
+        /// Filter by the provider's repository id
+        #[arg(long)]
+        external_repo_id: Option<String>,
+        /// Filter by container repository id
+        #[arg(long)]
+        container_id: Option<u64>,
+        /// Filter by team id
+        #[arg(long)]
+        team_id: Option<u64>,
+        /// Filter by issue type
+        #[arg(long = "type")]
+        issue_type: Option<String>,
+        /// Filter by status (server default: open)
+        #[arg(long)]
+        status: Option<String>,
+        /// Maximum number of groups to fetch
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Ignore a whole group — acts on the vulnerability across EVERY repo,
+    /// container, and cloud in the group. Audited, reversible via
+    /// `issues groups unignore`.
+    Ignore {
+        group_id: u64,
+        /// Reason for ignoring (recorded in the audit log)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Snooze a whole group — acts across EVERY location in the group.
+    Snooze {
+        group_id: u64,
+        /// Duration to snooze (e.g. 7d, 30d, 90d)
+        #[arg(long)]
+        until: String,
+        /// Reason for snoozing (recorded in the audit log)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Adjust a whole group's severity — acts across EVERY location in the
+    /// group. Audited, reversible.
+    Severity {
+        group_id: u64,
+        /// New severity level: critical|high|medium|low
+        #[arg(long)]
+        level: String,
+        /// Reason for the adjustment (recorded in the audit log)
+        #[arg(long)]
+        reason: String,
+    },
+    /// Reverse an ignore on a whole group
+    Unignore {
+        group_id: u64,
+        /// Reason for unignoring
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reverse a snooze on a whole group
+    Unsnooze { group_id: u64 },
 }
 
 #[derive(Debug, Subcommand)]
@@ -317,8 +413,58 @@ async fn run(command: Command, flags: &GlobalFlags) -> Result<(), ApiError> {
                 issues::counts(flags, &filters).await
             }
             IssuesCommand::Show { group_id } => issues::show(flags, group_id).await,
+            IssuesCommand::Groups { command } => match command {
+                GroupsCommand::List {
+                    repo,
+                    repo_id,
+                    external_repo_id,
+                    container_id,
+                    team_id,
+                    issue_type,
+                    status,
+                    limit,
+                } => {
+                    let filters = aikido_core::api::GroupFilters {
+                        code_repo_id: repo_id,
+                        external_code_repo_id: external_repo_id,
+                        code_repo_name: repo,
+                        container_repo_id: container_id,
+                        team_id,
+                        issue_type,
+                        status,
+                    };
+                    issues::groups_list(flags, &filters, limit).await
+                }
+                GroupsCommand::Ignore { group_id, reason } => {
+                    issues::groups_ignore(flags, group_id, reason).await
+                }
+                GroupsCommand::Snooze {
+                    group_id,
+                    until,
+                    reason,
+                } => issues::groups_snooze(flags, group_id, &until, reason).await,
+                GroupsCommand::Severity {
+                    group_id,
+                    level,
+                    reason,
+                } => issues::groups_severity(flags, group_id, &level, &reason).await,
+                GroupsCommand::Unignore { group_id, reason } => {
+                    issues::groups_unignore(flags, group_id, reason).await
+                }
+                GroupsCommand::Unsnooze { group_id } => {
+                    issues::groups_unsnooze(flags, group_id).await
+                }
+            },
             IssuesCommand::Ignore { issue_id, reason } => {
                 issues::ignore(flags, issue_id, reason).await
+            }
+            IssuesCommand::Unignore {
+                issue_id,
+                reason,
+                all_tags,
+            } => issues::unignore(flags, issue_id, reason, all_tags).await,
+            IssuesCommand::Unsnooze { issue_id, all_tags } => {
+                issues::unsnooze(flags, issue_id, all_tags).await
             }
             IssuesCommand::Snooze {
                 issue_id,
