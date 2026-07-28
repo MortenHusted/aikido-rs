@@ -49,10 +49,8 @@ pub struct Session {
 /// source exists. `verbose` enables request logging on stderr.
 pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiError> {
     let base_url = base_url_from_env();
-    let stored = store.load().ok().flatten();
-
-    // Client credentials: env wins, else whatever the store holds.
-    let refresh = match (
+    let env_token = non_empty_env(TOKEN_ENV);
+    let env_refresh = match (
         non_empty_env(CLIENT_ID_ENV),
         non_empty_env(CLIENT_SECRET_ENV),
     ) {
@@ -60,16 +58,39 @@ pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiErr
             client_id,
             client_secret,
         }),
-        _ => stored
+        _ => None,
+    };
+
+    // Consult the store only when the env doesn't fully configure the run —
+    // a keychain that hangs or fails must never take down a run that didn't
+    // need it, and never silently masquerade as "not authenticated".
+    let stored = if env_token.is_some() && env_refresh.is_some() {
+        None
+    } else {
+        match store.load() {
+            Ok(stored) => stored,
+            Err(err) if env_token.is_some() => {
+                // An env token can proceed without stored refresh
+                // credentials; degrade with a warning instead of dying.
+                eprintln!("Warning: could not read stored credentials: {err:#}");
+                None
+            }
+            Err(err) => return Err(ApiError::auth(format!("{err:#}"))),
+        }
+    };
+
+    // Client credentials: env wins, else whatever the store holds.
+    let refresh = env_refresh.or_else(|| {
+        stored
             .as_ref()
             .filter(|creds| !creds.client_id.is_empty() && !creds.client_secret.is_empty())
             .map(|creds| RefreshCredentials {
                 client_id: creds.client_id.clone(),
                 client_secret: creds.client_secret.clone(),
-            }),
-    };
+            })
+    });
 
-    let (token, token_source, expires_at) = if let Some(token) = non_empty_env(TOKEN_ENV) {
+    let (token, token_source, expires_at) = if let Some(token) = env_token {
         (token, TokenSource::Env, None)
     } else if let Some(creds) = &stored {
         // An empty stored access token is fine when refresh credentials

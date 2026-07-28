@@ -136,8 +136,16 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
 
     let session = match session::resolve(&store, flags.verbose) {
         Ok(session) => session,
-        Err(_) => {
-            // No credentials anywhere.
+        Err(err) => {
+            // No credentials anywhere — or a credential store that failed
+            // (e.g. an unanswerable keychain prompt timing out). The two
+            // must not read the same: a store failure keeps its message.
+            let message = err.to_string();
+            let summary = if message == "not authenticated" {
+                "Not authenticated. Run `aikido auth login` to authenticate.".to_string()
+            } else {
+                format!("Cannot read credentials: {message}")
+            };
             let data = json!({
                 "authenticated": false,
                 "source": "",
@@ -146,10 +154,16 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
                 "checked": false,
             });
             if format == Format::Styled {
-                eprintln!("Not authenticated. Run `aikido auth login` to authenticate.");
+                eprintln!("{summary}");
                 return Ok(());
             }
-            return render_ok(&format, Response::new(data), &[], None).map_err(render_failure);
+            return render_ok(
+                &format,
+                Response::new(data).with_summary(summary),
+                &[],
+                None,
+            )
+            .map_err(render_failure);
         }
     };
 

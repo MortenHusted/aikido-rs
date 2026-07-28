@@ -120,7 +120,16 @@ impl CredentialStore {
             Backend::File => self.file_get(),
             Backend::Auto => match keyring_get(self.keyring_service()) {
                 Ok(Some(creds)) => Ok(Some(creds)),
-                _ => self.file_get(),
+                Ok(None) => self.file_get(),
+                // Keychain failed (e.g. an unanswerable authorisation
+                // prompt timed out). Degrade to the file quietly only when
+                // the file actually has credentials; otherwise surface the
+                // keychain error instead of a misleading "not
+                // authenticated".
+                Err(keychain_err) => match self.file_get() {
+                    Ok(Some(creds)) => Ok(Some(creds)),
+                    _ => Err(keychain_err),
+                },
             },
         }
     }
@@ -248,6 +257,76 @@ fn decode_hex(input: &str) -> Result<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
+// Keychain call deadline
+// ---------------------------------------------------------------------------
+//
+// The macOS keychain ACL is per-binary: every rebuild produces a binary the
+// user has never authorised, so the first keychain read pops a modal
+// SecurityAgent prompt and the FFI call blocks until a human answers. In an
+// unattended run (an unattended launchd job) nobody can answer, and the block
+// sits *before* any HTTP, outside every reqwest timeout. FFI is not
+// cancellable, so the call runs on a detached worker thread and the caller
+// bounds its wait; on expiry the worker is abandoned (it dies with the
+// process) and the caller gets an actionable error instead of a hang.
+
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// Long enough for a present human to read the SecurityAgent prompt and
+/// click Allow (or type the keychain password).
+pub const KEYCHAIN_DEADLINE_INTERACTIVE: Duration = Duration::from_secs(30);
+/// When stdin is not a TTY the prompt is unanswerable by definition; a
+/// healthy keychain answers in milliseconds, so anything past a few seconds
+/// is the dialog. Fail fast enough that the unattended run's error lands in the
+/// same morning's log.
+pub const KEYCHAIN_DEADLINE_UNATTENDED: Duration = Duration::from_secs(5);
+
+/// Deadline for one keychain call, by whether a human could answer a prompt.
+pub fn keychain_deadline_for(interactive: bool) -> Duration {
+    if interactive {
+        KEYCHAIN_DEADLINE_INTERACTIVE
+    } else {
+        KEYCHAIN_DEADLINE_UNATTENDED
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn with_keychain_deadline<T: Send + 'static>(
+    operation: &'static str,
+    call: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    use std::io::IsTerminal;
+    let deadline = keychain_deadline_for(std::io::stdin().is_terminal());
+    call_with_deadline(deadline, operation, call)
+}
+
+/// Run `call` on a worker thread and wait at most `deadline` for it.
+fn call_with_deadline<T: Send + 'static>(
+    deadline: Duration,
+    operation: &'static str,
+    call: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("aikido-keychain".to_string())
+        .spawn(move || {
+            let _ = sender.send(call());
+        })
+        .context("spawning keychain worker thread")?;
+
+    match receiver.recv_timeout(deadline) {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "the OS keychain did not respond within {}s while {operation} — most likely a \
+             keychain authorisation prompt this process cannot answer (a rebuilt binary must be \
+             re-approved once). Escapes: set {STORE_ENV}=file to use the credentials file, or \
+             provide AIKIDO_TOKEN directly",
+            deadline.as_secs(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Keychain backend
 // ---------------------------------------------------------------------------
 
@@ -259,36 +338,46 @@ fn keyring_entry(service: &str) -> Result<keyring::Entry> {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn keyring_get(service: &str) -> Result<Option<Credentials>> {
-    let entry = keyring_entry(service)?;
-    match entry.get_password() {
-        Ok(data) => {
-            let json = decode_go_keyring_payload(&data)?;
-            Ok(Some(
-                serde_json::from_str(&json).context("parsing keyring credentials")?,
-            ))
+    let service = service.to_string();
+    with_keychain_deadline("reading credentials", move || {
+        let entry = keyring_entry(&service)?;
+        match entry.get_password() {
+            Ok(data) => {
+                let json = decode_go_keyring_payload(&data)?;
+                Ok(Some(
+                    serde_json::from_str(&json).context("parsing keyring credentials")?,
+                ))
+            }
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => {
+                Err(anyhow::Error::new(err).context(format!("reading keyring entry {service}")))
+            }
         }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => {
-            Err(anyhow::Error::new(err).context(format!("reading keyring entry {service}")))
-        }
-    }
+    })
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn keyring_set(service: &str, data: &str) -> Result<()> {
-    keyring_entry(service)?
-        .set_password(&encode_go_keyring_payload(data))
-        .with_context(|| format!("writing keyring entry {service}"))
+    let service = service.to_string();
+    let payload = encode_go_keyring_payload(data);
+    with_keychain_deadline("writing credentials", move || {
+        keyring_entry(&service)?
+            .set_password(&payload)
+            .with_context(|| format!("writing keyring entry {service}"))
+    })
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn keyring_delete(service: &str) -> Result<()> {
-    match keyring_entry(service)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) => {
-            Err(anyhow::Error::new(err).context(format!("deleting keyring entry {service}")))
+    let service = service.to_string();
+    with_keychain_deadline("deleting credentials", move || {
+        match keyring_entry(&service)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => {
+                Err(anyhow::Error::new(err).context(format!("deleting keyring entry {service}")))
+            }
         }
-    }
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -304,4 +393,45 @@ fn keyring_set(_service: &str, _data: &str) -> Result<()> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn keyring_delete(_service: &str) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn fast_calls_pass_their_result_through() {
+        let result = call_with_deadline(Duration::from_secs(1), "testing", || Ok(42u32)).unwrap();
+        assert_eq!(result, 42);
+        let err = call_with_deadline(Duration::from_secs(1), "testing", || {
+            Err::<(), _>(anyhow::anyhow!("inner failure"))
+        })
+        .unwrap_err();
+        assert!(format!("{err}").contains("inner failure"));
+    }
+
+    #[test]
+    fn a_blocked_call_times_out_with_the_escapes_named() {
+        let started = std::time::Instant::now();
+        let err = call_with_deadline(Duration::from_millis(50), "reading credentials", || {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "must not wait out the blocked call"
+        );
+        let message = format!("{err}");
+        assert!(message.contains("did not respond"), "{message}");
+        assert!(message.contains("AIKIDO_TOKEN_STORE=file"), "{message}");
+        assert!(message.contains("AIKIDO_TOKEN"), "{message}");
+        assert!(message.contains("re-approved"), "{message}");
+    }
+
+    #[test]
+    fn unattended_deadline_is_much_shorter_than_interactive() {
+        assert_eq!(keychain_deadline_for(true), Duration::from_secs(30));
+        assert_eq!(keychain_deadline_for(false), Duration::from_secs(5));
+    }
 }

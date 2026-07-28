@@ -546,6 +546,117 @@ async fn auth_status_without_credentials_is_unauthenticated() {
 }
 
 // ---------------------------------------------------------------------------
+// Credential-store failures must be loud, and must not take down runs that
+// never needed the store. (The keychain equivalent — an unanswerable ACL
+// prompt — is bounded by a deadline in core; these exercise the same
+// propagation paths via a file store that errors on read.)
+// ---------------------------------------------------------------------------
+
+/// A config dir whose credentials.json cannot be read (it is a directory).
+fn broken_store_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("credentials.json")).unwrap();
+    dir
+}
+
+#[tokio::test]
+async fn a_failing_store_reports_its_error_not_bare_unauthenticated() {
+    let server = MockServer::start().await;
+    let dir = broken_store_dir();
+
+    let output = aikido(&server, dir.path())
+        .args(["issues", "list", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["code"], "auth_error");
+    let message = envelope["error"].as_str().unwrap();
+    assert_ne!(
+        message, "not authenticated",
+        "store failure must keep its message"
+    );
+    assert!(
+        message.contains("credentials.json"),
+        "must name the store problem: {message}"
+    );
+}
+
+#[tokio::test]
+async fn env_token_survives_a_failing_store_with_a_warning() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(header("authorization", "Bearer env-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = broken_store_dir();
+    let output = aikido(&server, dir.path())
+        .env("AIKIDO_TOKEN", "env-token")
+        .args(["issues", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "env token must not die on store failure"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("could not read stored credentials"),
+        "degradation must be announced: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn fully_env_configured_runs_never_touch_the_store() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let dir = broken_store_dir();
+    let output = aikido(&server, dir.path())
+        .env("AIKIDO_TOKEN", "env-token")
+        .env("AIKIDO_CLIENT_ID", "env-id")
+        .env("AIKIDO_CLIENT_SECRET", "env-secret")
+        .args(["issues", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        !stderr.contains("could not read"),
+        "store must be skipped entirely, not read-and-warned: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn auth_status_reports_a_failing_store_as_unreadable_not_unauthenticated() {
+    let server = MockServer::start().await;
+    let dir = broken_store_dir();
+
+    let output = aikido(&server, dir.path())
+        .args(["auth", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["data"]["authenticated"], false);
+    assert!(
+        envelope["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Cannot read credentials"),
+        "status must distinguish unreadable from absent: {envelope}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // auth login / logout
 // ---------------------------------------------------------------------------
 

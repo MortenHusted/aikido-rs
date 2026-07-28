@@ -22,6 +22,20 @@ install location is explicit and independent of `CARGO_HOME` — relevant on
 machines where mise sets `GOBIN`/`CARGO_HOME` to tool-managed directories, so
 a bare `cargo install` would land the binary somewhere surprising.
 
+**The rebuild trap (macOS).** Keychain access is authorised *per binary*:
+"Always Allow" grants the exact executable that asked, so every rebuild or
+reinstall produces a binary macOS treats as a stranger, and its first
+keychain read pops a SecurityAgent prompt. Interactively that is one extra
+click. Unattended (launchd/cron) nobody can click — so the credential read
+is bounded: 30s when stdin is a TTY (time for a present human to approve),
+5s otherwise (a healthy keychain answers in milliseconds; anything longer
+is an unanswerable dialog). On expiry the run fails with an error naming
+the escapes instead of hanging: set `AIKIDO_TOKEN_STORE=file` or provide
+`AIKIDO_TOKEN`. After any rebuild, run one interactive command (e.g.
+`aikido auth status`) and approve the prompt before relying on unattended
+runs. The symptom without this bound was a silent indefinite hang with no
+hint that a GUI dialog was involved.
+
 ## Authentication
 
 ```sh
