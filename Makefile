@@ -16,8 +16,18 @@
 # The identity is a self-signed Code Signing certificate created once in
 # Keychain Access (Certificate Assistant → Create a Certificate, Self Signed
 # Root, type Code Signing). It reports CSSMERR_TP_NOT_TRUSTED because nothing
-# vouches for it — that only affects verification, not signing, and the
-# keychain ACL only needs the requirement to be stable.
+# vouches for it — that only affects verification, not signing.
+#
+# HOW MUCH THIS HELPS IS NOT ESTABLISHED. Three rebuilds straight after an
+# approval ran clean, but a later rebuild prompted again, so that run was
+# probably measuring a short-lived authorisation cache rather than the
+# requirement actually matching. A stable requirement is still strictly better
+# than a content hash and costs nothing — but treat the prompt as reduced, not
+# eliminated, until someone measures it over a longer window.
+#
+# For anything unattended, do not depend on this at all. Set
+# AIKIDO_TOKEN_STORE=file to take the keychain out of the path entirely; a
+# scheduled job must never be one dialog away from doing nothing.
 #
 # IDENTIFIER is set explicitly so it does not vary with the output filename;
 # that way the built binary and the installed copy share one requirement and
