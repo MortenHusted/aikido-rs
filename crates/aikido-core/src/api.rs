@@ -169,6 +169,15 @@ pub async fn list_containers(
     paginate(client, "/containers", base_query, limit, 20).await
 }
 
+/// `POST /containers/{id}/scan` — queue a container scan. Fire-and-forget:
+/// a 200 `{"success": 1}` means the scan was *started*; the API returns no
+/// job handle to await completion.
+pub async fn scan_container(client: &Client, container_id: u64) -> Result<(), ApiError> {
+    client
+        .post_no_content(&format!("/containers/{container_id}/scan"), &[])
+        .await
+}
+
 /// `GET /containers/{id}`.
 pub async fn get_container(client: &Client, container_id: u64) -> Result<Value, ApiError> {
     client

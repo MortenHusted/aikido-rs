@@ -123,6 +123,10 @@ struct ListContainersParams {
     name: Option<String>,
     /// Filter by container tag
     tag: Option<String>,
+    /// Return only active containers whose scan coverage is stale: last scan
+    /// older than this many days, never scanned, or image pushed after the
+    /// last scan. Each result gains a scan_staleness object.
+    stale_days: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -290,22 +294,49 @@ impl AikidoServer {
 
     #[tool(
         name = "aikido_list_containers",
-        description = "List container repositories monitored by Aikido.",
+        description = "List container repositories monitored by Aikido, including scan freshness (last_scanned_at, last_pushed_at; unix seconds, -1 = never). Pass stale_days to get only containers whose scan coverage is stale.",
         annotations(read_only_hint = true)
     )]
     async fn list_containers(
         &self,
         Parameters(params): Parameters<ListContainersParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        api::list_containers(
+        let containers = api::list_containers(
             &client()?,
             params.limit.unwrap_or(100),
             params.name.as_deref(),
             params.tag.as_deref(),
         )
         .await
-        .map_err(to_error_data)
-        .and_then(|containers| json_result(&Value::Array(containers)))
+        .map_err(to_error_data)?;
+        let containers = match params.stale_days {
+            Some(days) => {
+                let now_ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system clock before 1970")
+                    .as_secs() as i64;
+                aikido_core::staleness::filter_stale(containers, now_ts, days).0
+            }
+            None => containers,
+        };
+        json_result(&Value::Array(containers))
+    }
+
+    #[tool(
+        name = "aikido_scan_container",
+        description = "Queue an Aikido scan for a container. Fire-and-forget: the call returns once the scan is accepted, with no job handle — completion shows up later as a new last_scanned_at on the container."
+    )]
+    async fn scan_container(
+        &self,
+        Parameters(params): Parameters<ContainerIdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        api::scan_container(&client()?, params.container_id)
+            .await
+            .map_err(to_error_data)?;
+        json_result(&json!({
+            "ok": true,
+            "summary": format!("Scan queued for container {}.", params.container_id)
+        }))
     }
 
     #[tool(

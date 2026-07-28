@@ -870,6 +870,147 @@ async fn containers_show_and_licenses_round_trip() {
 }
 
 #[tokio::test]
+async fn containers_scan_queues_and_reports_async() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/containers/7/scan"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "success": 1 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["containers", "scan", "7", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    let summary = envelope["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("queued") || summary.contains("asynchronously"),
+        "summary must not imply completion: {summary}"
+    );
+}
+
+#[tokio::test]
+async fn containers_scan_surfaces_inactive_container_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/containers/7/scan"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "The container must be active before it can be scanned."
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["containers", "scan", "7", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["ok"], false);
+    assert!(envelope["error"]
+        .as_str()
+        .unwrap()
+        .contains("must be active"));
+}
+
+#[tokio::test]
+async fn containers_list_stale_days_filters_and_annotates() {
+    let now = chrono::Utc::now().timestamp();
+    let day = 86_400;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/containers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            // Fresh: scanned yesterday, pushed before that.
+            { "id": 1, "name": "fresh", "is_active": true,
+              "last_scanned_at": now - day, "last_pushed_at": now - 2 * day },
+            // Stale: pushed after the last scan (the pushed-after-scan failure mode).
+            { "id": 2, "name": "stale-pushed", "is_active": true,
+              "last_scanned_at": now - 30 * day, "last_pushed_at": now - day,
+              "tag": "sha-abc", "last_scanned_tag": "latest" },
+            // Inactive: deliberately off, excluded from staleness.
+            { "id": 3, "name": "inactive", "is_active": false,
+              "last_scanned_at": -1, "last_pushed_at": -1 }
+        ])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args(["containers", "list", "--stale-days", "7", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let data = envelope["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1, "only the stale container: {envelope}");
+    assert_eq!(data[0]["name"], "stale-pushed");
+
+    // The comparison is explicit — no operator arithmetic required.
+    let staleness = &data[0]["scan_staleness"];
+    assert_eq!(staleness["scan_age_days"], 30);
+    assert_eq!(staleness["pushed_after_scan"], true);
+    assert_eq!(staleness["tag_drift"], true);
+    let reasons: Vec<&str> = staleness["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(reasons.contains(&"scan_older_than_limit"));
+    assert!(reasons.contains(&"pushed_after_scan"));
+
+    let summary = envelope["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("1 of 2 active containers scan-stale"),
+        "summary must state the comparison: {summary}"
+    );
+}
+
+#[tokio::test]
+async fn containers_list_shows_scan_freshness_in_the_table() {
+    let now = chrono::Utc::now().timestamp();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/containers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 1, "name": "registry/app", "tag": "latest", "provider": "ecr",
+              "is_active": true, "last_scanned_at": now - 86_400, "last_pushed_at": -1 }
+        ])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let expected_date = chrono::DateTime::from_timestamp(now - 86_400, 0)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    aikido(&server, dir.path())
+        .args(["containers", "list", "--md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "| Name | Tag | Provider | Status | Scanned | Pushed |",
+        ))
+        .stdout(predicate::str::contains(&expected_date))
+        .stdout(predicate::str::contains("never"));
+}
+
+#[tokio::test]
 async fn repos_list_passes_name_filter_and_renders_envelope() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

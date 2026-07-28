@@ -7,8 +7,8 @@ The spec itself is not committed (~660 KB); regenerate any time with the command
 Every dedicated read route is also reachable ad hoc through `aikido api get <path>`;
 the **CLI** column below lists dedicated commands only.
 
-Totals: **168 operations** across **147 paths**; **12 covered**
-by dedicated commands/tools (11 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
+Totals: **168 operations** across **147 paths**; **13 covered**
+by dedicated commands/tools (12 in both CLI and MCP, plus `/openapi/spec` via the passthrough).
 
 ## access-tokens (0/1 covered)
 
@@ -55,7 +55,7 @@ by dedicated commands/tools (11 in both CLI and MCP, plus `/openapi/spec` via th
 |---|---|---|---|---|---|
 | GET | `/code-quality/findings` | List code quality findings for a pull request | `code_quality:read` | — | — |
 
-## containers (3/25 covered)
+## containers (4/25 covered)
 
 | Method | Path | Summary | Scope | CLI | MCP |
 |---|---|---|---|---|---|
@@ -82,7 +82,7 @@ by dedicated commands/tools (11 in both CLI and MCP, plus `/openapi/spec` via th
 | GET | `/containers/{container_repo_id}/licenses/export` | Export SBOM | `repositories:read` | `containers licenses` | `aikido_container_licenses` |
 | GET | `/containers/{container_repo_id}/runners` | List container runners | `containers:read` | — | — |
 | GET | `/containers/{container_repo_id}/sbom/exportRaw` | Export Raw SBOM | `containers:read` | — | — |
-| POST | `/containers/{container_repo_id}/scan` | Scan container | `containers:write` | — | — |
+| POST | `/containers/{container_repo_id}/scan` | Scan container | `containers:write` | `containers scan` | `aikido_scan_container` |
 | PUT | `/containers/{container_repo_id}/sensitivity` | Update sensitivity | `container:write` | — | — |
 
 ## cve (0/1 covered)

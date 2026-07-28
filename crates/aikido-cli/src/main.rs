@@ -206,7 +206,7 @@ enum ReposCommand {
 
 #[derive(Debug, Subcommand)]
 enum ContainersCommand {
-    /// List container repositories
+    /// List container repositories with scan/push freshness
     List {
         /// Maximum number of containers to fetch
         #[arg(long, default_value_t = 100)]
@@ -217,9 +217,19 @@ enum ContainersCommand {
         /// Filter by container tag
         #[arg(long)]
         tag: Option<String>,
+        /// Show only active containers whose scan coverage is stale: last
+        /// scan older than N days, never scanned, or image pushed after the
+        /// last scan. Each result gains a `scan_staleness` object with the
+        /// derived facts.
+        #[arg(long, value_name = "N")]
+        stale_days: Option<i64>,
     },
     /// Show details for a container repository
     Show { container_id: u64 },
+    /// Queue a scan for a container. Returns as soon as the scan is
+    /// accepted — the API provides no job handle, so completion must be
+    /// observed via last_scanned_at.
+    Scan { container_id: u64 },
     /// Export license information for a container repository
     Licenses { container_id: u64 },
 }
@@ -286,10 +296,14 @@ async fn run(command: Command, flags: &GlobalFlags) -> Result<(), ApiError> {
             ReposCommand::Licenses { repo_id } => repos::licenses(flags, repo_id).await,
         },
         Command::Containers { command } => match command {
-            ContainersCommand::List { limit, name, tag } => {
-                containers::list(flags, limit, name, tag).await
-            }
+            ContainersCommand::List {
+                limit,
+                name,
+                tag,
+                stale_days,
+            } => containers::list(flags, limit, name, tag, stale_days).await,
             ContainersCommand::Show { container_id } => containers::show(flags, container_id).await,
+            ContainersCommand::Scan { container_id } => containers::scan(flags, container_id).await,
             ContainersCommand::Licenses { container_id } => {
                 containers::licenses(flags, container_id).await
             }

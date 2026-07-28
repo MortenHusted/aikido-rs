@@ -313,9 +313,11 @@ async fn parse_response(response: reqwest::Response) -> Result<Value, ApiError> 
 
     let body: Value = response.json().await.unwrap_or(Value::Null);
 
-    // Aikido error bodies carry a human-readable `reason_phrase`.
+    // Aikido error bodies carry a human-readable `reason_phrase`; a few
+    // routes (e.g. the container scan trigger) use `error` instead.
     let reason = body
         .get("reason_phrase")
+        .or_else(|| body.get("error"))
         .and_then(Value::as_str)
         .map(str::to_string);
 

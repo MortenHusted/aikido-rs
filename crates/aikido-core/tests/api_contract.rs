@@ -231,6 +231,43 @@ async fn licenses_normalise_single_object_to_list() {
 }
 
 #[tokio::test]
+async fn scan_container_posts_the_scan_trigger() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/containers/9/scan"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "success": 1 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    api::scan_container(&client, 9).await.unwrap();
+}
+
+/// The scan route reports failures as `{"error": ...}` (not
+/// `reason_phrase`); the message must still surface.
+#[tokio::test]
+async fn scan_container_surfaces_the_error_body_on_400() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/public/v1/containers/9/scan"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "The container must be active before it can be scanned."
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri(), "tok");
+    let err = api::scan_container(&client, 9).await.unwrap_err();
+    assert_eq!(err.code(), "api_error");
+    assert_eq!(
+        err.to_string(),
+        "The container must be active before it can be scanned."
+    );
+}
+
+#[tokio::test]
 async fn get_container_hits_the_show_endpoint() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

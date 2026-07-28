@@ -103,10 +103,23 @@ aikido issues severity <id> --level low --reason TEXT
 aikido repos list       [--limit 100] [--name NAME] [--inactive]
 aikido repos scan <repo_id> [--sast] [--iac] [--secrets]
 aikido repos licenses <repo_id>
-aikido containers list  [--limit 100] [--name NAME] [--tag TAG]
+aikido containers list  [--limit 100] [--name NAME] [--tag TAG] [--stale-days N]
 aikido containers show <id>
+aikido containers scan <id>
 aikido containers licenses <id>
+aikido api get <path>   [--query k=v ...]      # read-only raw passthrough
 ```
+
+Container scan freshness: `containers list` shows Scanned/Pushed dates in
+table output, and `--stale-days N` filters to active containers whose scan
+coverage is stale — last scan older than N days, never scanned, or an image
+pushed after the last scan (the failure mode where a silently stopped
+scanner reports a healthy-looking low finding count). Each stale result
+carries a `scan_staleness` object (`scan_age_days`, `pushed_after_scan`,
+`tag_drift`, `reasons`) so the comparison is explicit rather than left to
+eyeballing timestamps. `containers scan <id>` queues a rescan; the API is
+fire-and-forget (no job handle), so completion shows up later as a new
+`last_scanned_at`.
 
 Global flags: `--json`, `--jq <expr>` (jq filtering via [jaq]), `--md`/`-m`,
 `--quiet` (bare data, no envelope), `--verbose`/`-v`.
@@ -164,7 +177,8 @@ Tools:
 | `aikido_list_repos` | read | List code repositories |
 | `aikido_scan_repo` | mutation | Trigger a repo scan (SAST/IaC/secrets flags) |
 | `aikido_repo_licenses` | read | License export for a repo |
-| `aikido_list_containers` | read | List container repositories |
+| `aikido_list_containers` | read | List container repositories with scan freshness; `stale_days` filters to stale coverage |
+| `aikido_scan_container` | mutation | Queue a container scan (fire-and-forget, no job handle) |
 | `aikido_get_container` | read | Container detail |
 | `aikido_container_licenses` | read | License export for a container |
 

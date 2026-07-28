@@ -9,4 +9,5 @@ pub mod client;
 pub mod credentials;
 pub mod error;
 pub mod session;
+pub mod staleness;
 pub mod until;
