@@ -2,6 +2,7 @@
 //! rendering its own success output; `main` renders errors and maps exit
 //! codes in one place.
 
+pub mod api;
 pub mod auth;
 pub mod containers;
 pub mod issues;

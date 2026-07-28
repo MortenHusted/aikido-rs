@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
-use aikido_cli::commands::{auth, containers, issues, repos};
+use aikido_cli::commands::{api, auth, containers, issues, repos};
 use aikido_cli::output::{render_err, GlobalFlags};
 use aikido_core::error::ApiError;
 
@@ -92,6 +92,23 @@ enum Command {
     Containers {
         #[command(subcommand)]
         command: ContainersCommand,
+    },
+    /// Raw read-only access to the Aikido public API
+    Api {
+        #[command(subcommand)]
+        command: ApiCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ApiCommand {
+    /// GET a path relative to the API base (e.g. /openapi/spec)
+    Get {
+        /// Path relative to https://app.aikido.dev/api/public/v1
+        path: String,
+        /// Query parameter as k=v (repeatable)
+        #[arg(long = "query", value_name = "K=V")]
+        query: Vec<String>,
     },
 }
 
@@ -276,6 +293,9 @@ async fn run(command: Command, flags: &GlobalFlags) -> Result<(), ApiError> {
             ContainersCommand::Licenses { container_id } => {
                 containers::licenses(flags, container_id).await
             }
+        },
+        Command::Api { command } => match command {
+            ApiCommand::Get { path, query } => api::get(flags, &path, &query).await,
         },
     }
 }

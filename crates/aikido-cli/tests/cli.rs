@@ -708,6 +708,128 @@ async fn auth_logout_removes_the_credentials_file() {
 }
 
 // ---------------------------------------------------------------------------
+// api get — raw read-only passthrough
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn api_get_hits_the_path_with_query_params_and_wraps_the_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/openapi/spec"))
+        .and(query_param("version", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "openapi": "3.0.0",
+            "info": { "title": "Aikido API", "version": "1.0" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args([
+            "api",
+            "get",
+            "/openapi/spec",
+            "--query",
+            "version=3",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["openapi"], "3.0.0");
+}
+
+#[tokio::test]
+async fn api_get_inherits_auth_refresh_from_the_shared_client() {
+    let server = MockServer::start().await;
+    mount_token_endpoint(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/openapi/spec"))
+        .and(header("authorization", "Bearer expired-stored-token"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/openapi/spec"))
+        .and(header("authorization", "Bearer fresh-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "openapi": "3.0.0" })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "expired-stored-token", "2020-01-01T00:00:00Z");
+
+    aikido(&server, dir.path())
+        .args(["api", "get", "/openapi/spec", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ok\": true"));
+}
+
+#[tokio::test]
+async fn api_get_rejects_paths_that_escape_the_base() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    for bad in [
+        "https://evil.example/x",
+        "//evil.example/x",
+        "/issues/../../oauth/token",
+        "relative/path",
+        "/spec?inline=1",
+    ] {
+        let output = aikido(&server, dir.path())
+            .args(["api", "get", bad, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "must reject {bad:?}");
+        let envelope: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(envelope["ok"], false);
+        assert!(
+            envelope["error"].as_str().unwrap().contains("invalid path"),
+            "unexpected error for {bad:?}: {envelope}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn api_get_works_with_jq() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/openapi/spec"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "paths": { "/issues/export": {}, "/containers": {} }
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    let output = aikido(&server, dir.path())
+        .args([
+            "api",
+            "get",
+            "/openapi/spec",
+            "--jq",
+            ".paths | keys | length",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "2");
+}
+
+// ---------------------------------------------------------------------------
 // Containers & repos read paths through the binary
 // ---------------------------------------------------------------------------
 
