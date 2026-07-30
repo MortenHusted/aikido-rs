@@ -151,11 +151,16 @@ two are never conflated.
 `issues groups list` returns groups that *touch* that location (verified
 against live data: most groups span several repos/containers), so a group
 mutation acts on the vulnerability across every repo, container, and cloud
-in the group — never just the repo you filtered by. To make that impossible
-to stumble into, every group mutation shows its blast radius (locations +
-expected open-issue count) before acting, and `ignore`/`snooze` assert the
-API's reported affected-issue count against that expectation afterwards — a
-mismatch is an error (the message states the mutation was still applied).
+in the group — never just the repo you filtered by. The forward mutations
+`ignore`, `snooze`, and `severity` compute the blast radius (locations +
+expected open-issue count) before acting; styled CLI output shows it at that
+point, while machine CLI formats and MCP results carry it in the final
+result. `ignore`/`snooze` assert the API's reported affected-issue count
+against the expectation afterwards — a mismatch is an error whose message
+states the mutation was still applied. `severity` reports that its endpoint
+supplies no affected count. The reversal verbs `unignore` and `unsnooze`
+remain workspace-wide but intentionally skip the open-issue guard: they
+target non-open issues and their endpoints report no affected count.
 Per-issue verbs remain the single-instance alternative.
 
 Container scan freshness: `containers list` shows Scanned/Pushed dates in

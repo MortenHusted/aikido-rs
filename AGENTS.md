@@ -87,11 +87,15 @@ Cross-cutting core modules: `credentials.rs` (keychain + 0600 file backends),
   and *individual issues* (`/issues/export` rows) are different units — one group spans
   many repos/containers/clouds. Any output that reports a count must name its axis in
   words. Never compare one to the other.
-- **Group mutations are workspace-wide.** A location filter returns groups that merely
-  *touch* that location. So every group mutation calls `api::group_blast_radius()` first,
-  prints locations + expected open-issue count, and asserts the API's reported affected
-  count against that expectation afterwards — a mismatch is an error whose message states
-  the mutation *was* applied. Keep this preflight/assert pair on any new group verb.
+- **Guarded forward group mutations are workspace-wide.** A location filter returns groups
+  that merely *touch* that location. So group `ignore`, `snooze`, and `severity` call
+  `api::group_blast_radius()` first and surface locations + expected open-issue count.
+  `ignore`/`snooze` assert the API's reported affected count afterwards — a mismatch is an
+  error whose message states the mutation *was* applied; `severity` reports that the API
+  supplies no count. Group `unignore`/`unsnooze` are also workspace-wide, but intentionally
+  skip this open-issue guard: they target non-open issues and their endpoints report no
+  affected count. Every new group verb must explicitly adopt the forward or reversal
+  contract rather than silently copying one.
 - **Human-facing dates render in local time**, via `output::local_date_from_epoch` /
   `date_in_zone`. A UTC date shifts a calendar day near midnight, which defeats
   "scanned yesterday, pushed today" eyeballing. Route all timestamp→date rendering there.
