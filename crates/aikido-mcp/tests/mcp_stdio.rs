@@ -94,6 +94,31 @@ fn write_credentials(dir: &std::path::Path, access_token: &str) {
     .unwrap();
 }
 
+async fn mount_group_blast_radius(server: &MockServer, expected_issues: usize) {
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/groups/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "locations": [
+                { "id": 1, "name": "acme/api", "type": "code_repo" },
+                { "id": 2, "name": "acme/web", "type": "code_repo" },
+                { "id": 3, "name": "registry/api", "type": "container_repo" }
+            ]
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+    let issues: Vec<Value> = (0..expected_issues).map(|id| json!({ "id": id })).collect();
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(query_param("filter_issue_group_id", "42"))
+        .and(query_param("filter_status", "open"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issues))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
 /// The text content of a successful tool result, parsed as JSON.
 fn tool_json(response: &Value) -> Value {
     assert_eq!(
@@ -168,6 +193,67 @@ async fn lists_all_twenty_one_tools_with_descriptions() {
             "{group_tool} must state the blast radius: {description}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn group_ignore_returns_the_preflight_blast_radius_and_affected_count() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .and(body_json(json!({ "reason": "false positive" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "ignored_single_issues_amount": 3
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token");
+    let mut mcp = McpServer::start(&server.uri(), dir.path());
+
+    let response = mcp.call_tool(
+        2,
+        "aikido_ignore_issue_group",
+        json!({ "group_id": 42, "reason": "false positive" }),
+    );
+    let result = tool_json(&response);
+    assert_eq!(result["group_id"], 42);
+    assert_eq!(result["expected_issues"], 3);
+    assert_eq!(result["affected_issues"], 3);
+    assert_eq!(result["locations"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn group_ignore_count_mismatch_is_an_error_that_says_the_mutation_was_applied() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "ignored_single_issues_amount": 7
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token");
+    let mut mcp = McpServer::start(&server.uri(), dir.path());
+
+    let response = mcp.call_tool(2, "aikido_ignore_issue_group", json!({ "group_id": 42 }));
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains('7') && message.contains('3'),
+        "mismatch must name actual and expected counts: {response}"
+    );
+    assert!(
+        message.contains("MUTATION WAS APPLIED"),
+        "error must not read as a no-op failure: {response}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
