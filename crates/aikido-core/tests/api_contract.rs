@@ -182,7 +182,10 @@ fn group_mutation_count_verifier_accepts_matching_or_missing_counts_and_rejects_
     let error = api::verify_group_mutation_count(42, &blast, Some(7), "ignored").unwrap_err();
     assert_eq!(error.code(), "api_error");
     let message = error.to_string();
-    assert!(message.contains('7') && message.contains('3'), "{message}");
+    assert!(
+        message.contains("affected 7 issues but 3 open issues were expected"),
+        "{message}"
+    );
     assert!(message.contains("MUTATION WAS APPLIED"), "{message}");
 }
 

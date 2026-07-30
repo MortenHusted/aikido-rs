@@ -93,9 +93,10 @@ Cross-cutting core modules: `credentials.rs` (keychain + 0600 file backends),
   `ignore`/`snooze` assert the API's reported affected count afterwards — a mismatch is an
   error whose message states the mutation *was* applied; `severity` reports that the API
   supplies no count. Group `unignore`/`unsnooze` are also workspace-wide, but intentionally
-  skip this open-issue guard: they target non-open issues and their endpoints report no
-  affected count. Every new group verb must explicitly adopt the forward or reversal
-  contract rather than silently copying one.
+  skip this open-issue guard: they target non-open issues, so an open-issue preflight cannot
+  express their expected effect; the core operations expose no affected-count result to
+  verify. Every new group verb must explicitly adopt the forward or reversal contract rather
+  than silently copying one.
 - **Human-facing dates render in local time**, via `output::local_date_from_epoch` /
   `date_in_zone`. A UTC date shifts a calendar day near midnight, which defeats
   "scanned yesterday, pushed today" eyeballing. Route all timestamp→date rendering there.

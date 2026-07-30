@@ -247,7 +247,7 @@ async fn group_ignore_count_mismatch_is_an_error_that_says_the_mutation_was_appl
     let response = mcp.call_tool(2, "aikido_ignore_issue_group", json!({ "group_id": 42 }));
     let message = response["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains('7') && message.contains('3'),
+        message.contains("affected 7 issues but 3 open issues were expected"),
         "mismatch must name actual and expected counts: {response}"
     );
     assert!(

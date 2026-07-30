@@ -160,7 +160,9 @@ against the expectation afterwards — a mismatch is an error whose message
 states the mutation was still applied. `severity` reports that its endpoint
 supplies no affected count. The reversal verbs `unignore` and `unsnooze`
 remain workspace-wide but intentionally skip the open-issue guard: they
-target non-open issues and their endpoints report no affected count.
+target non-open issues, so an open-issue preflight cannot express their
+expected effect; the CLI and MCP operations expose no affected-count result
+to verify.
 Per-issue verbs remain the single-instance alternative.
 
 Container scan freshness: `containers list` shows Scanned/Pushed dates in
