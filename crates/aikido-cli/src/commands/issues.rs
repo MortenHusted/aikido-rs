@@ -206,10 +206,10 @@ fn styled_axis(counts: &Value, axis: &str, label: &str) -> String {
 
 // ---------------------------------------------------------------------------
 // Issue groups — the dashboard's unit. A group is keyed by the
-// vulnerability and its locations span repos, containers, and clouds, so
-// every group mutation here (1) shows the blast radius before acting and
-// (2) asserts the API's reported per-issue count against it afterwards.
-// A mismatch is an error, not a warning.
+// vulnerability and its locations span repos, containers, and clouds.
+// Guarded forward mutations show the open-issue blast radius before acting
+// and verify the API's reported per-issue count afterwards. Reversals target
+// non-open issues and their endpoints report no affected count.
 // ---------------------------------------------------------------------------
 
 const GROUP_LIST_COLUMNS: &[Column] = &[
@@ -311,19 +311,7 @@ fn finish_group_mutation(
     affected: Option<u64>,
     verb: &str,
 ) -> Result<(), ApiError> {
-    if let Some(actual) = affected {
-        if actual as usize != blast.expected_issues {
-            return Err(ApiError::Api {
-                status: 0,
-                message: format!(
-                    "group {group_id} {verb} affected {actual} issues but {expected} open issues \
-                     were expected at preflight. THE MUTATION WAS APPLIED — the group changed \
-                     between preflight and mutation; verify it in the Aikido dashboard",
-                    expected = blast.expected_issues,
-                ),
-            });
-        }
-    }
+    api::verify_group_mutation_count(group_id, &blast, affected, verb)?;
 
     let locations = blast.locations.len();
     let summary = match affected {

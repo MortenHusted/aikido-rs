@@ -235,6 +235,28 @@ pub async fn group_blast_radius(
     })
 }
 
+/// Verify the affected count reported by a guarded forward group mutation.
+/// A mismatch is detected only after the endpoint has applied the mutation,
+/// so the shared error must never read like a no-op failure.
+pub fn verify_group_mutation_count(
+    group_id: u64,
+    blast: &GroupBlastRadius,
+    affected: Option<u64>,
+    verb: &str,
+) -> Result<(), ApiError> {
+    if let Some(actual) = affected {
+        if actual != blast.expected_issues as u64 {
+            return Err(ApiError::GroupMutationMismatch {
+                group_id,
+                verb: verb.to_string(),
+                actual,
+                expected: blast.expected_issues,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// `PUT /issues/groups/{id}/ignore`. Returns the number of single issues
 /// the API reports as ignored, when it reports one.
 pub async fn ignore_issue_group(

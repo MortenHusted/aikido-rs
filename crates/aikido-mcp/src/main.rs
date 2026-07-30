@@ -373,28 +373,16 @@ impl AikidoServer {
         json_result(&Value::Array(groups))
     }
 
-    /// Shared tail for group mutations: assert the reported per-issue count
-    /// against the preflight blast radius; a mismatch is an error (the
-    /// mutation HAS been applied — the error says so).
+    /// Shared adapter tail for guarded forward group mutations. Core owns
+    /// affected-count verification; this adapter owns the MCP result shape.
     fn group_mutation_result(
         group_id: u64,
         blast: api::GroupBlastRadius,
         affected: Option<u64>,
         verb: &str,
     ) -> Result<CallToolResult, ErrorData> {
-        if let Some(actual) = affected {
-            if actual as usize != blast.expected_issues {
-                return Err(ErrorData::internal_error(
-                    format!(
-                        "group {group_id} {verb} affected {actual} issues but {expected} open \
-                         issues were expected at preflight. THE MUTATION WAS APPLIED — verify \
-                         the group in the Aikido dashboard",
-                        expected = blast.expected_issues
-                    ),
-                    None,
-                ));
-            }
-        }
+        api::verify_group_mutation_count(group_id, &blast, affected, verb)
+            .map_err(to_error_data)?;
         json_result(&json!({
             "ok": true,
             "group_id": group_id,

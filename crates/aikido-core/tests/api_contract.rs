@@ -169,6 +169,23 @@ async fn group_blast_radius_combines_locations_and_open_issue_count() {
     assert_eq!(blast.expected_issues, 3);
 }
 
+#[test]
+fn group_mutation_count_verifier_accepts_matching_or_missing_counts_and_rejects_mismatch() {
+    let blast = api::GroupBlastRadius {
+        locations: vec![],
+        expected_issues: 3,
+    };
+
+    api::verify_group_mutation_count(42, &blast, Some(3), "ignored").unwrap();
+    api::verify_group_mutation_count(42, &blast, None, "severity adjusted").unwrap();
+
+    let error = api::verify_group_mutation_count(42, &blast, Some(7), "ignored").unwrap_err();
+    assert_eq!(error.code(), "api_error");
+    let message = error.to_string();
+    assert!(message.contains('7') && message.contains('3'), "{message}");
+    assert!(message.contains("MUTATION WAS APPLIED"), "{message}");
+}
+
 #[tokio::test]
 async fn group_ignore_and_snooze_report_affected_amounts() {
     let server = MockServer::start().await;
