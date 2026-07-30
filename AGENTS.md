@@ -38,7 +38,7 @@ Three crates, one shared core so the CLI and the MCP server cannot drift:
 ```
 crates/aikido-core/   API client, OAuth auth, credential store, session resolution
 crates/aikido-cli/    binary `aikido` (clap)  — src/lib.rs holds the behaviour, main.rs is a shell
-crates/aikido-mcp/    binary `aikido-mcp` (rmcp, stdio)
+crates/aikido-mcp/    binary `aikido-mcp` (rmcp 3, dual-era stdio)
 ```
 
 The load-bearing invariant: **anything that touches auth, HTTP, or the API belongs in
@@ -110,6 +110,8 @@ Integration tests spawn the **real binaries** (`assert_cmd` / `CARGO_BIN_EXE_aik
 with `env_clear()` plus `AIKIDO_BASE_URL=<wiremock>`, `AIKIDO_TOKEN_STORE=file`,
 `AIKIDO_CONFIG_DIR=<tempdir>`. New behaviour that crosses the process boundary (envelope
 shape, exit codes, MCP tool wiring) gets a test at that level, not just a unit test.
+The MCP suite retains both protocol eras: a legacy `initialize` session and a modern
+`2026-07-28` stateless path through `server/discover` and per-request `_meta`.
 `crates/aikido-core/tests/api_contract.rs` asserts query params and request bodies
 verbatim — extend it whenever you add an endpoint.
 

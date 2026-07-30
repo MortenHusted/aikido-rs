@@ -214,7 +214,9 @@ styled text, pipes get JSON).
 ## MCP server
 
 `aikido-mcp` speaks MCP over stdio and uses the same credential store and
-refresh logic as the CLI. Register it e.g. in Claude Code:
+refresh logic as the CLI. It supports both protocol eras: legacy clients use
+the `initialize` handshake, while MCP `2026-07-28` clients use stateless
+`server/discover` and per-request metadata. Register it e.g. in Claude Code:
 
 ```sh
 claude mcp add aikido -- ~/.local/bin/aikido-mcp
