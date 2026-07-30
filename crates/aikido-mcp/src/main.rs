@@ -5,7 +5,8 @@
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CacheScope, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
+    CacheScope, CallToolResult, ContentBlock, Implementation, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler, ServiceExt};
@@ -685,15 +686,32 @@ impl ServerHandler for AikidoServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        // The catalog is compiled into the binary and identical for every
-        // caller. A finite public TTL keeps prompt caches stable while still
-        // allowing a newly installed binary to refresh the list promptly.
-        Ok(
-            ListToolsResult::with_all_items(Self::tool_router().list_all())
+        let tools = ListToolsResult::with_all_items(Self::tool_router().list_all());
+        if context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+        {
+            // The catalog is compiled into the binary and identical for every
+            // caller. A finite public TTL keeps prompt caches stable while
+            // still allowing an installed update to refresh promptly.
+            Ok(tools
                 .with_ttl_ms(300_000)
-                .with_cache_scope(CacheScope::Public),
+                .with_cache_scope(CacheScope::Public))
+        } else {
+            // Legacy clients receive only fields defined by their negotiated
+            // protocol, including clients that reject unknown result fields.
+            Ok(tools)
+        }
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        // rmcp's build-environment default identifies the SDK crate, not this
+        // binary. Expose the application name and version alongside its
+        // capabilities and modern cache hints.
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
         )
     }
 }

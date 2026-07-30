@@ -45,7 +45,13 @@ impl McpServer {
                 "clientInfo": { "name": "test", "version": "0" }
             }
         }));
+        assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
         assert!(init["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(init["result"]["serverInfo"]["name"], "aikido-mcp");
+        assert_eq!(
+            init["result"]["serverInfo"]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
         server.notify(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
         server
     }
@@ -62,6 +68,14 @@ impl McpServer {
             "server must advertise MCP 2026-07-28: {discover}"
         );
         assert!(discover["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(
+            discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "aikido-mcp"
+        );
+        assert_eq!(
+            discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
         server
     }
 
@@ -179,6 +193,9 @@ async fn lists_all_twenty_one_tools_with_descriptions() {
     let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    assert!(response["result"].get("resultType").is_none());
+    assert!(response["result"].get("ttlMs").is_none());
+    assert!(response["result"].get("cacheScope").is_none());
     let tools = response["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(names.len(), 21);
@@ -237,7 +254,7 @@ async fn lists_all_twenty_one_tools_with_descriptions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn modern_stdio_discovery_and_tool_call_are_stateless() {
+async fn modern_stdio_discovery_and_cold_tool_call_are_stateless() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/public/v1/issues/export"))
@@ -258,8 +275,11 @@ async fn modern_stdio_discovery_and_tool_call_are_stateless() {
     assert_eq!(tools["result"]["ttlMs"], 300_000);
     assert_eq!(tools["result"]["cacheScope"], "public");
 
-    let response = mcp.modern_request(
-        3,
+    // A tool request on a fresh process must not depend on discovery or any
+    // other prior message. Its per-request metadata is the complete context.
+    let mut cold_mcp = McpServer::spawn(&server.uri(), dir.path());
+    let response = cold_mcp.modern_request(
+        1,
         "tools/call",
         json!({
             "name": "aikido_list_issues",
@@ -320,6 +340,43 @@ async fn group_ignore_count_mismatch_is_an_error_that_says_the_mutation_was_appl
     let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_ignore_issue_group", json!({ "group_id": 42 }));
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("affected 7 issues but 3 open issues were expected"),
+        "mismatch must name actual and expected counts: {response}"
+    );
+    assert!(
+        message.contains("MUTATION WAS APPLIED"),
+        "error must not read as a no-op failure: {response}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn modern_group_ignore_mismatch_says_the_mutation_was_applied() {
+    let server = MockServer::start().await;
+    mount_group_blast_radius(&server, 3).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/public/v1/issues/groups/42/ignore"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "ignored_single_issues_amount": 7
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token");
+    let mut mcp = McpServer::spawn(&server.uri(), dir.path());
+
+    let response = mcp.modern_request(
+        1,
+        "tools/call",
+        json!({
+            "name": "aikido_ignore_issue_group",
+            "arguments": { "group_id": 42 }
+        }),
+    );
     let message = response["error"]["message"].as_str().unwrap();
     assert!(
         message.contains("affected 7 issues but 3 open issues were expected"),
@@ -438,6 +495,31 @@ async fn missing_credentials_is_a_tool_error_with_the_auth_hint() {
     let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_list_issues", json!({}));
+    let error = &response["error"];
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("not authenticated"),
+        "unexpected error: {response}"
+    );
+    assert_eq!(error["data"]["hint"], "Run: aikido auth login");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn modern_missing_credentials_preserves_the_auth_hint() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap(); // no credentials
+    let mut mcp = McpServer::spawn(&server.uri(), dir.path());
+
+    let response = mcp.modern_request(
+        1,
+        "tools/call",
+        json!({
+            "name": "aikido_list_issues",
+            "arguments": {}
+        }),
+    );
     let error = &response["error"];
     assert!(
         error["message"]
