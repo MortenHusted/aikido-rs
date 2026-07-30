@@ -4,8 +4,11 @@
 //! `aikido` CLI uses, so token refresh and persistence behave identically.
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
-use rmcp::{tool, tool_router, ErrorData, ServiceExt};
+use rmcp::model::{
+    CacheScope, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
+};
+use rmcp::service::RequestContext;
+use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler, ServiceExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -223,7 +226,7 @@ struct ContainerIdParams {
 #[derive(Clone)]
 struct AikidoServer;
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl AikidoServer {
     #[tool(
         name = "aikido_list_issues",
@@ -674,6 +677,24 @@ impl AikidoServer {
             .await
             .map_err(to_error_data)
             .and_then(|packages| json_result(&Value::Array(packages)))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for AikidoServer {
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        // The catalog is compiled into the binary and identical for every
+        // caller. A finite public TTL keeps prompt caches stable while still
+        // allowing a newly installed binary to refresh the list promptly.
+        Ok(
+            ListToolsResult::with_all_items(Self::tool_router().list_all())
+                .with_ttl_ms(300_000)
+                .with_cache_scope(CacheScope::Public),
+        )
     }
 }
 

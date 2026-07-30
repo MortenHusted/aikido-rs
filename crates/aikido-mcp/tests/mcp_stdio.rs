@@ -16,8 +16,8 @@ struct McpServer {
 
 impl McpServer {
     /// Spawn `aikido-mcp` against `base_url` with credentials stored in
-    /// `config_dir`, and complete the MCP initialize handshake.
-    fn start(base_url: &str, config_dir: &std::path::Path) -> Self {
+    /// `config_dir`, without selecting a protocol era yet.
+    fn spawn(base_url: &str, config_dir: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_aikido-mcp"))
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap_or_default())
@@ -30,7 +30,12 @@ impl McpServer {
             .spawn()
             .expect("spawning aikido-mcp");
         let reader = BufReader::new(child.stdout.take().expect("child stdout"));
-        let mut server = Self { child, reader };
+        Self { child, reader }
+    }
+
+    /// Start a legacy session through the pre-2026 initialize handshake.
+    fn start_legacy(base_url: &str, config_dir: &std::path::Path) -> Self {
+        let mut server = Self::spawn(base_url, config_dir);
 
         let init = server.request(json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -42,6 +47,21 @@ impl McpServer {
         }));
         assert!(init["result"]["capabilities"]["tools"].is_object());
         server.notify(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+        server
+    }
+
+    /// Start a modern stateless exchange through `server/discover`.
+    fn start_modern(base_url: &str, config_dir: &std::path::Path) -> Self {
+        let mut server = Self::spawn(base_url, config_dir);
+        let discover = server.modern_request(1, "server/discover", json!({}));
+        assert_eq!(discover["result"]["resultType"], "complete");
+        assert!(
+            discover["result"]["supportedVersions"]
+                .as_array()
+                .is_some_and(|versions| versions.iter().any(|version| version == "2026-07-28")),
+            "server must advertise MCP 2026-07-28: {discover}"
+        );
+        assert!(discover["result"]["capabilities"]["tools"].is_object());
         server
     }
 
@@ -69,6 +89,27 @@ impl McpServer {
         self.request(json!({
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
+        }))
+    }
+
+    fn modern_request(&mut self, id: u64, method: &str, params: Value) -> Value {
+        let mut params = params.as_object().cloned().expect("object params");
+        params.insert(
+            "_meta".to_string(),
+            json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "aikido-mcp-test",
+                    "version": "0"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }),
+        );
+        self.request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
         }))
     }
 }
@@ -135,7 +176,7 @@ fn tool_json(response: &Value) -> Value {
 async fn lists_all_twenty_one_tools_with_descriptions() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let tools = response["result"]["tools"].as_array().expect("tools array");
@@ -196,6 +237,40 @@ async fn lists_all_twenty_one_tools_with_descriptions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn modern_stdio_discovery_and_tool_call_are_stateless() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 7, "severity": "HIGH" }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token");
+    let mut mcp = McpServer::start_modern(&server.uri(), dir.path());
+
+    let tools = mcp.modern_request(2, "tools/list", json!({}));
+    assert_eq!(tools["result"]["resultType"], "complete");
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 21);
+    assert_eq!(tools["result"]["ttlMs"], 300_000);
+    assert_eq!(tools["result"]["cacheScope"], "public");
+
+    let response = mcp.modern_request(
+        3,
+        "tools/call",
+        json!({
+            "name": "aikido_list_issues",
+            "arguments": {}
+        }),
+    );
+    assert_eq!(response["result"]["resultType"], "complete");
+    assert_eq!(tool_json(&response)[0]["id"], 7);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn group_ignore_returns_the_preflight_blast_radius_and_affected_count() {
     let server = MockServer::start().await;
     mount_group_blast_radius(&server, 3).await;
@@ -212,7 +287,7 @@ async fn group_ignore_returns_the_preflight_blast_radius_and_affected_count() {
 
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "valid-token");
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(
         2,
@@ -242,7 +317,7 @@ async fn group_ignore_count_mismatch_is_an_error_that_says_the_mutation_was_appl
 
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "valid-token");
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_ignore_issue_group", json!({ "group_id": 42 }));
     let message = response["error"]["message"].as_str().unwrap();
@@ -272,7 +347,7 @@ async fn list_issues_passes_filters_and_returns_the_api_payload() {
 
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "valid-token");
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_list_issues", json!({ "severity": "critical" }));
     let issues = tool_json(&response);
@@ -295,7 +370,7 @@ async fn adjust_severity_posts_the_mutation_through_shared_core() {
 
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "valid-token");
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(
         2,
@@ -344,7 +419,7 @@ async fn expired_token_refreshes_and_persists_like_the_cli() {
 
     let dir = tempfile::tempdir().unwrap();
     write_credentials(dir.path(), "stale-token");
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_list_issues", json!({}));
     assert!(tool_json(&response).as_array().unwrap().is_empty());
@@ -360,7 +435,7 @@ async fn expired_token_refreshes_and_persists_like_the_cli() {
 async fn missing_credentials_is_a_tool_error_with_the_auth_hint() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap(); // no credentials
-    let mut mcp = McpServer::start(&server.uri(), dir.path());
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
 
     let response = mcp.call_tool(2, "aikido_list_issues", json!({}));
     let error = &response["error"];
