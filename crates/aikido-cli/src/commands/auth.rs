@@ -43,22 +43,10 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
             message: format!("save credentials: {err:#}"),
         })?;
 
-    // Say where the secret went. The default backend falls back to the
-    // plaintext file when the keychain refuses the write; a login that
-    // reports success without naming the backend hides exactly that.
-    let stored_in = match &target {
-        SaveTarget::Keychain => "Credentials stored in the OS keychain.".to_string(),
-        SaveTarget::File => format!(
-            "Credentials stored in {} (owner-only file).",
-            store.credentials_path().display()
-        ),
-        SaveTarget::FileAfterKeychainFailure(err) => format!(
-            "WARNING: the OS keychain refused the write ({err}); credentials stored in the \
-             plaintext file {} instead.",
-            store.credentials_path().display()
-        ),
-    };
-    let summary = format!("Authenticated successfully. Token expires at {expires_at}. {stored_in}");
+    let summary = format!(
+        "Authenticated successfully. Token expires at {expires_at}. {}",
+        describe_save_target(&store, &target)
+    );
     match flags.format() {
         Format::Styled => {
             eprintln!("{summary}");
@@ -76,6 +64,24 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
             None,
         )
         .map_err(render_failure),
+    }
+}
+
+/// Say where the secret went. The default backend falls back to the
+/// plaintext file when the keychain refuses the write; a login that reports
+/// success without naming the backend hides exactly that.
+fn describe_save_target(store: &CredentialStore, target: &SaveTarget) -> String {
+    match target {
+        SaveTarget::Keychain => "Credentials stored in the OS keychain.".to_string(),
+        SaveTarget::File => format!(
+            "Credentials stored in {} (owner-only file).",
+            store.credentials_path().display()
+        ),
+        SaveTarget::FileAfterKeychainFailure(err) => format!(
+            "WARNING: the OS keychain refused the write ({err}); credentials stored in the \
+             plaintext file {} instead.",
+            store.credentials_path().display()
+        ),
     }
 }
 
