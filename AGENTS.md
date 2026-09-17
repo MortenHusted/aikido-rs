@@ -12,7 +12,7 @@ cargo test --workspace     # wiremock + assert_cmd; never touches the real keych
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 cargo audit                # RustSec advisories against Cargo.lock; CI enforces it, locally it skips when not installed
-make cross-check           # cargo zigbuild check for Linux musl and Windows GNU; needs zig + cargo-zigbuild
+make cross-check           # cargo-zigbuild clippy for the Linux and Windows GNU targets; needs zig + cargo-zigbuild
 ```
 
 The credential store is cfg-gated per platform (keychain on macOS only; file

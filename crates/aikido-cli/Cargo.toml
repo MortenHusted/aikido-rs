@@ -4,7 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Aikido Security CLI — issues, repos, and containers from the terminal."
+repository.workspace = true
+homepage.workspace = true
+description = "Unofficial Aikido Security CLI — issues, repos, and containers from the terminal."
+
+[package.metadata.dist]
+# The Homebrew formula is named after the repository, not the crate, so
+# `brew install MortenHusted/tap/aikido-rs` installs the `aikido` binary and
+# the formula name cannot collide with any other `aikido-cli`.
+formula = "aikido-rs"
 
 [lints]
 workspace = true

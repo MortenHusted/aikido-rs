@@ -85,13 +85,13 @@ audit:
 # store is cfg-gated per platform, so a Mac-only build can be green while the
 # Linux or Windows binary does not compile; this catches that before CI does.
 # ring compiles C for the target, so a plain `cargo check --target` fails on
-# a Mac for want of a musl or MinGW C compiler; cargo-zigbuild supplies one
+# a Mac for want of a Linux or MinGW C compiler; cargo-zigbuild supplies one
 # through zig for every target here. Windows is checked as the GNU target
 # because zig cannot stand in for MSVC; the release matrix builds MSVC on a
 # native Windows runner and CI runs the full suite there. One-time setup:
 #   brew install zig && cargo install cargo-zigbuild
 #   rustup target add $(CROSS_TARGETS)
-CROSS_TARGETS ?= x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu
+CROSS_TARGETS ?= x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu
 cross-check:
 	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "cross-check: needs cargo-zigbuild and zig (see Makefile)"; exit 1; }
 	@for target in $(CROSS_TARGETS); do \

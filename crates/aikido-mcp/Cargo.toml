@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Aikido Security MCP server over the shared aikido-core client."
+repository.workspace = true
+homepage.workspace = true
+description = "Unofficial Aikido Security MCP server over the shared aikido-core client."
 
 [lints]
 workspace = true

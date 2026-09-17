@@ -7,6 +7,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["MortenHusted"]
+repository = "https://github.com/MortenHusted/aikido-rs"
+homepage = "https://github.com/MortenHusted/aikido-rs"
 
 [workspace.lints.rust]
 unused_must_use = "deny"
@@ -27,3 +29,8 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 tempfile = "3"
 wiremock = "0.6"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
