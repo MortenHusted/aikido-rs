@@ -77,12 +77,26 @@ stderr. The file is created owner-only from its first byte and swapped into
 place atomically, so a crash mid-write cannot leave a truncated or
 world-readable copy behind; the config directory is created `0700`.
 
-On Linux the OS keychain backend is not built — the `keyring` dependency is
-scoped to macOS and Windows, so credentials always live in the 0600 file at
-`~/.config/aikido/credentials.json` (the platform config dir on Linux) and
-`AIKIDO_TOKEN_STORE=keychain` is
-rejected. This is deliberate: Linux secret-service support drags in a D-Bus
-dependency stack for a platform where this CLI runs headless anyway.
+The OS keychain backend is built on macOS only. Everywhere else the
+default backend is the file, `AIKIDO_TOKEN_STORE=keychain` is rejected with
+a build-configuration error, and a fresh install reads as "not
+authenticated" rather than as a keychain failure:
+
+- **Linux** — secret-service support drags in a D-Bus dependency stack for a
+  platform where this CLI runs headless anyway. Credentials live in the 0600
+  file at `~/.config/aikido/credentials.json`.
+- **Windows** — Credential Manager caps a blob at 2560 bytes of UTF-16
+  (`CRED_MAX_CREDENTIAL_BLOB_SIZE`). The credential JSON for a real Aikido
+  token measured 1643 characters, 3286 bytes as UTF-16, so every keychain
+  write would fail and fall through to the file anyway. Credentials live at
+  `%APPDATA%\aikido\credentials.json`; there are no mode bits on Windows, so
+  the per-user profile ACL is the boundary.
+
+`auth status` reports where the active token was actually read from
+(`source: "env" | "keychain" | "file"`). When the keychain was read but a
+`credentials.json` also exists, that file is a stale plaintext copy left by
+an earlier fallback; status names it in `shadow_file` and in the summary,
+and `aikido auth logout` removes both.
 
 > Interop note: the Go CLI's keychain library (zalando/go-keyring) stores
 > every value as `go-keyring-base64:` + base64(JSON), not raw JSON. This CLI
@@ -96,8 +110,8 @@ Environment variables:
 |---|---|
 | `AIKIDO_TOKEN` | Access-token override (wins over the store) |
 | `AIKIDO_CLIENT_ID` / `AIKIDO_CLIENT_SECRET` | OAuth client credentials (win over stored ones) |
-| `AIKIDO_TOKEN_STORE` | `file` or `keychain`; default: keychain with file fallback |
-| `AIKIDO_CONFIG_DIR` | Config dir override (default: platform config dir — `~/Library/Application Support/aikido` on macOS, `~/.config/aikido` on Linux) |
+| `AIKIDO_TOKEN_STORE` | `file` or `keychain`; default: keychain with file fallback on macOS, file elsewhere |
+| `AIKIDO_CONFIG_DIR` | Config dir override (default: platform config dir — `~/Library/Application Support/aikido` on macOS, `~/.config/aikido` on Linux, `%APPDATA%\aikido` on Windows) |
 | `AIKIDO_BASE_URL` | API base override (tests/dev; default `https://app.aikido.dev`) |
 
 Auth semantics — deliberate fixes over the Go CLI:
@@ -256,6 +270,25 @@ Tools:
 | `aikido_get_container` | read | Container detail |
 | `aikido_container_licenses` | read | License export for a container |
 
+## Platforms and releases
+
+Supported targets, each built on a native runner by the release workflow
+(`.github/workflows/release.yml`, on a `v*` tag) and attached to the GitHub
+release with a `SHA256SUMS` file:
+
+| Target | Notes |
+|---|---|
+| `aarch64-apple-darwin`, `x86_64-apple-darwin` | Keychain backend available |
+| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | Static; file store only |
+| `x86_64-pc-windows-msvc` | File store only (see Authentication) |
+
+TLS is rustls with the `ring` crypto provider and bundled webpki roots, so
+no target needs cmake, NASM, or system OpenSSL. CI runs the full test suite
+on Linux, macOS, and Windows. From a Mac, `make cross-check` type-checks the
+Linux musl and Windows targets through zig (`brew install zig && cargo
+install cargo-zigbuild`, then `rustup target add` the targets the Makefile
+lists).
+
 ## Development
 
 ```sh
@@ -263,6 +296,8 @@ cargo build --workspace
 cargo test --workspace          # wiremock + assert_cmd; never touches the real keychain or API
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+cargo audit                     # RustSec advisories against Cargo.lock
+make cross-check                # cargo zigbuild check for the Linux and Windows targets
 ```
 
 Tests pin the credential store to a temp-dir file backend

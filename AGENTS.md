@@ -12,7 +12,14 @@ cargo test --workspace     # wiremock + assert_cmd; never touches the real keych
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 cargo audit                # RustSec advisories against Cargo.lock; CI enforces it, locally it skips when not installed
+make cross-check           # cargo zigbuild check for Linux musl and Windows GNU; needs zig + cargo-zigbuild
 ```
+
+The credential store is cfg-gated per platform (keychain on macOS only; file
+everywhere else), so a change there must pass `make cross-check`, not just the host
+build. Never add a TLS or crypto dependency that needs cmake, NASM, or a system
+OpenSSL: the release matrix builds on plain native runners with ring as the only
+crypto provider.
 
 `make build` / `make release` also codesign the binary with a stable identity
 (`dev.aikido.cli`) so the macOS keychain ACL approval survives rebuilds; a missing
@@ -68,7 +75,8 @@ Request path, end to end:
    pretty JSON text content. `main.rs` (CLI) is the single place errors are rendered
    and exit codes are mapped.
 
-Cross-cutting core modules: `credentials.rs` (keychain + 0600 file backends),
+Cross-cutting core modules: `credentials.rs` (macOS keychain + 0600 file backends;
+`load_with_source` says which one was read, `save` says which one took the write),
 `staleness.rs` (container scan-freshness scoring), `until.rs` (`7d` → unix timestamp),
 `error.rs` (`ApiError` → stable `code` + `hint`).
 
