@@ -11,12 +11,25 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// `aikido` wired to `server` with stored credentials in `dir`.
 fn aikido(server: &MockServer, dir: &std::path::Path) -> Command {
+    let mut cmd = bare_aikido(server, dir);
+    cmd.env("AIKIDO_TOKEN_STORE", "file");
+    cmd
+}
+
+/// `aikido` with a scrubbed environment: only PATH, the mock server, and the
+/// config dir, so no AIKIDO_* from the developer's shell leaks in. On Windows
+/// a process with an empty environment cannot initialise Winsock (every
+/// connection then fails with "error sending request"), so SYSTEMROOT is
+/// passed through where it exists.
+fn bare_aikido(server: &MockServer, dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("aikido").unwrap();
     cmd.env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("AIKIDO_BASE_URL", server.uri())
-        .env("AIKIDO_TOKEN_STORE", "file")
         .env("AIKIDO_CONFIG_DIR", dir);
+    if let Ok(system_root) = std::env::var("SYSTEMROOT") {
+        cmd.env("SYSTEMROOT", system_root);
+    }
     cmd
 }
 
@@ -875,12 +888,10 @@ async fn default_store_is_the_file_where_no_keychain_is_built() {
         .await;
 
     let dir = tempfile::tempdir().unwrap();
-    let mut cmd = Command::cargo_bin("aikido").unwrap();
-    cmd.env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("AIKIDO_BASE_URL", server.uri())
-        .env("AIKIDO_CONFIG_DIR", dir.path());
-    let output = cmd.args(["auth", "status", "--json"]).output().unwrap();
+    let output = bare_aikido(&server, dir.path())
+        .args(["auth", "status", "--json"])
+        .output()
+        .unwrap();
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["data"]["authenticated"], false);
     assert!(
@@ -892,12 +903,10 @@ async fn default_store_is_the_file_where_no_keychain_is_built() {
     );
 
     write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
-    let mut cmd = Command::cargo_bin("aikido").unwrap();
-    cmd.env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("AIKIDO_BASE_URL", server.uri())
-        .env("AIKIDO_CONFIG_DIR", dir.path());
-    let output = cmd.args(["auth", "status", "--json"]).output().unwrap();
+    let output = bare_aikido(&server, dir.path())
+        .args(["auth", "status", "--json"])
+        .output()
+        .unwrap();
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["data"]["authenticated"], true, "{envelope}");
     assert_eq!(envelope["data"]["source"], "file");

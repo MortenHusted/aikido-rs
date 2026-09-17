@@ -18,12 +18,20 @@ impl McpServer {
     /// Spawn `aikido-mcp` against `base_url` with credentials stored in
     /// `config_dir`, without selecting a protocol era yet.
     fn spawn(base_url: &str, config_dir: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_aikido-mcp"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aikido-mcp"));
+        command
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("AIKIDO_BASE_URL", base_url)
             .env("AIKIDO_TOKEN_STORE", "file")
-            .env("AIKIDO_CONFIG_DIR", config_dir)
+            .env("AIKIDO_CONFIG_DIR", config_dir);
+        // On Windows a process with an empty environment cannot initialise
+        // Winsock, so every request to the mock server would fail; pass
+        // SYSTEMROOT through where it exists.
+        if let Ok(system_root) = std::env::var("SYSTEMROOT") {
+            command.env("SYSTEMROOT", system_root);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
