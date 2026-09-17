@@ -419,7 +419,7 @@ fn decode_hex(input: &str) -> Result<Vec<u8>> {
 // The macOS keychain ACL is per-binary: every rebuild produces a binary the
 // user has never authorised, so the first keychain read pops a modal
 // SecurityAgent prompt and the FFI call blocks until a human answers. In an
-// unattended run (an unattended launchd job) nobody can answer, and the block
+// unattended run (a scheduled launchd job) nobody can answer, and the block
 // sits *before* any HTTP, outside every reqwest timeout. FFI is not
 // cancellable, so the call runs on a detached worker thread and the caller
 // bounds its wait; on expiry the worker is abandoned (it dies with the
