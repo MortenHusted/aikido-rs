@@ -29,7 +29,7 @@ pub const CONFIG_DIR_ENV: &str = "AIKIDO_CONFIG_DIR";
 
 /// OAuth client credentials plus the current access token, as persisted.
 /// Field names are the wire format shared with the Go CLI — do not rename.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Credentials {
     #[serde(default)]
     pub client_id: String,
@@ -40,6 +40,42 @@ pub struct Credentials {
     /// RFC3339 timestamp; empty when unknown.
     #[serde(default)]
     pub expires_at: String,
+}
+
+/// Placeholder for secret material in `Debug` output. A derived `Debug`
+/// would print the client secret and bearer token the moment anyone adds a
+/// `{:?}` to a verbose line or an error context; redacting here means that
+/// mistake cannot leak anything.
+pub const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &REDACTED)
+            .field("access_token", &REDACTED)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// Where [`CredentialStore::save`] actually put the credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveTarget {
+    Keychain,
+    File,
+    /// The default backend tried the keychain, which failed with the
+    /// contained error, and fell back to the plaintext file.
+    FileAfterKeychainFailure(String),
+}
+
+impl SaveTarget {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Keychain => "keychain",
+            Self::File | Self::FileAfterKeychainFailure(_) => "file",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,15 +172,32 @@ impl CredentialStore {
         }
     }
 
-    /// Persist credentials to the selected backend.
-    pub fn save(&self, creds: &Credentials) -> Result<()> {
+    /// Persist credentials to the selected backend and report where they
+    /// actually landed. The default backend degrades to the plaintext file
+    /// when the keychain refuses the write (an unanswered ACL prompt in an
+    /// unattended run is the common case); the caller must tell the user,
+    /// because a secret silently moving from the keychain to a file is
+    /// exactly what an operator publishing this tool needs to know about.
+    pub fn save(&self, creds: &Credentials) -> Result<SaveTarget> {
         let data = serde_json::to_string(creds).context("serializing credentials")?;
         match self.backend() {
-            Backend::Keychain => keyring_set(self.keyring_service(), &data),
-            Backend::File => self.file_set(&data),
-            Backend::Auto => {
-                keyring_set(self.keyring_service(), &data).or_else(|_| self.file_set(&data))
+            Backend::Keychain => {
+                keyring_set(self.keyring_service(), &data)?;
+                Ok(SaveTarget::Keychain)
             }
+            Backend::File => {
+                self.file_set(&data)?;
+                Ok(SaveTarget::File)
+            }
+            Backend::Auto => match keyring_set(self.keyring_service(), &data) {
+                Ok(()) => Ok(SaveTarget::Keychain),
+                Err(keychain_err) => {
+                    self.file_set(&data)?;
+                    Ok(SaveTarget::FileAfterKeychainFailure(format!(
+                        "{keychain_err:#}"
+                    )))
+                }
+            },
         }
     }
 
@@ -179,28 +232,71 @@ impl CredentialStore {
         }
     }
 
+    /// Write the credentials file owner-only from its first byte and swap it
+    /// into place atomically. Writing then chmod-ing (the previous approach)
+    /// left a window where the secret sat at umask permissions, usually
+    /// world-readable, and a crash mid-write left a truncated file the next
+    /// run could not parse. A per-process temp name keeps two concurrent
+    /// runs (the scheduled job and an interactive login) from clobbering
+    /// each other's partial writes.
     fn file_set(&self, data: &str) -> Result<()> {
         let dir = self.config_dir();
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        create_private_dir(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = self.credentials_path();
-        fs::write(&path, data).with_context(|| format!("writing {}", path.display()))?;
-        chmod_600(&path)
+        let tmp = dir.join(format!(".credentials.json.{}.tmp", std::process::id()));
+        let written = write_private_file(&tmp, data)
+            .and_then(|()| fs::rename(&tmp, &path).context("moving into place"));
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        written.with_context(|| format!("writing {}", path.display()))
     }
 }
 
 #[cfg(unix)]
-fn chmod_600(path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)
-        .with_context(|| format!("reading metadata of {}", path.display()))?
-        .permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms).with_context(|| format!("chmod 600 {}", path.display()))
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    // Mode applies only to directories this call creates; an existing
+    // directory the user may share is left as they set it.
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(unix)]
+fn write_private_file(path: &std::path::Path, data: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    // A leftover temp file from a crashed run would keep its old mode and
+    // could be a symlink, so it is removed rather than reused; `create_new`
+    // then guarantees this process owns the inode it writes.
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).context("removing stale temp file"),
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .context("creating temp file")?;
+    file.write_all(data.as_bytes())
+        .and_then(|()| file.sync_all())
+        .context("writing temp file")
 }
 
 #[cfg(not(unix))]
-fn chmod_600(_path: &std::path::Path) -> Result<()> {
-    Ok(())
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &std::path::Path, data: &str) -> Result<()> {
+    // Windows has no mode bits; the per-user config directory's default ACL
+    // is the protection here.
+    fs::write(path, data).context("writing temp file")
 }
 
 // ---------------------------------------------------------------------------

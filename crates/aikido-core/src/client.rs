@@ -23,7 +23,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::auth;
-use crate::credentials::CredentialStore;
+use crate::credentials::{CredentialStore, SaveTarget};
 use crate::error::ApiError;
 
 pub const DEFAULT_BASE_URL: &str = "https://app.aikido.dev";
@@ -53,13 +53,21 @@ pub fn base_url_from_env() -> String {
 }
 
 /// OAuth client credentials enabling 401 auto-refresh.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RefreshCredentials {
     pub client_id: String,
     pub client_secret: String,
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for RefreshCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshCredentials")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &crate::credentials::REDACTED)
+            .finish()
+    }
+}
+
 pub struct Client {
     base_url: String,
     http: reqwest::Client,
@@ -71,6 +79,21 @@ pub struct Client {
     store: Option<CredentialStore>,
     request_timeout: Duration,
     verbose: bool,
+}
+
+/// The bearer token never appears in `Debug` output — see
+/// [`crate::credentials::REDACTED`].
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("base_url", &self.base_url)
+            .field("token", &crate::credentials::REDACTED)
+            .field("refresh", &self.refresh)
+            .field("store", &self.store)
+            .field("request_timeout", &self.request_timeout)
+            .field("verbose", &self.verbose)
+            .finish()
+    }
 }
 
 impl Client {
@@ -240,21 +263,47 @@ impl Client {
         *self.token.lock().expect("token mutex poisoned") = token.access_token.clone();
 
         if let Some(store) = &self.store {
-            // Update the stored access token in place, preserving whatever
-            // client credentials the store already holds. Persistence is
-            // best-effort: a store failure must not fail the API call.
-            let mut creds = store.load().ok().flatten().unwrap_or_default();
-            if creds.client_id.is_empty() {
-                creds.client_id = refresh.client_id.clone();
-                creds.client_secret = refresh.client_secret.clone();
-            }
-            creds.access_token = token.access_token.clone();
-            creds.expires_at = token.expires_at();
-            if let Err(err) = store.save(&creds) {
-                eprintln!("Warning: could not persist refreshed token: {err:#}");
-            }
+            self.persist_refreshed_token(store, refresh, &token);
         }
         Ok(())
+    }
+
+    /// Update the stored access token in place, preserving whatever client
+    /// credentials the store already holds. Persistence is best-effort: a
+    /// store failure must not fail the API call. A store that cannot be
+    /// *read* is left alone rather than overwritten — treating a transient
+    /// keychain failure as "empty" and saving over it would discard the
+    /// operator's stored credentials.
+    fn persist_refreshed_token(
+        &self,
+        store: &CredentialStore,
+        refresh: &RefreshCredentials,
+        token: &auth::TokenResponse,
+    ) {
+        let mut creds = match store.load() {
+            Ok(creds) => creds.unwrap_or_default(),
+            Err(err) => {
+                eprintln!(
+                    "Warning: not persisting refreshed token, stored credentials unreadable: {err:#}"
+                );
+                return;
+            }
+        };
+        if creds.client_id.is_empty() {
+            creds.client_id = refresh.client_id.clone();
+            creds.client_secret = refresh.client_secret.clone();
+        }
+        creds.access_token = token.access_token.clone();
+        creds.expires_at = token.expires_at();
+        match store.save(&creds) {
+            Ok(SaveTarget::FileAfterKeychainFailure(keychain_err)) => eprintln!(
+                "Warning: keychain write failed ({keychain_err}); refreshed token written to \
+                 the plaintext credentials file {}",
+                store.credentials_path().display()
+            ),
+            Ok(_) => {}
+            Err(err) => eprintln!("Warning: could not persist refreshed token: {err:#}"),
+        }
     }
 }
 

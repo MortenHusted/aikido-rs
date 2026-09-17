@@ -11,7 +11,7 @@ use std::io::{BufRead, IsTerminal, Write};
 
 use aikido_core::auth::exchange_token;
 use aikido_core::client::base_url_from_env;
-use aikido_core::credentials::{CredentialStore, Credentials};
+use aikido_core::credentials::{CredentialStore, Credentials, SaveTarget};
 use aikido_core::error::ApiError;
 use aikido_core::session::{self, TokenSource, CLIENT_ID_ENV, CLIENT_SECRET_ENV};
 use serde_json::json;
@@ -30,7 +30,8 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
     let token = exchange_token(&base_url_from_env(), &client_id, &client_secret).await?;
     let expires_at = token.expires_at();
 
-    store()
+    let store = store();
+    let target = store
         .save(&Credentials {
             client_id,
             client_secret,
@@ -42,7 +43,22 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
             message: format!("save credentials: {err:#}"),
         })?;
 
-    let summary = format!("Authenticated successfully. Token expires at {expires_at}");
+    // Say where the secret went. The default backend falls back to the
+    // plaintext file when the keychain refuses the write; a login that
+    // reports success without naming the backend hides exactly that.
+    let stored_in = match &target {
+        SaveTarget::Keychain => "Credentials stored in the OS keychain.".to_string(),
+        SaveTarget::File => format!(
+            "Credentials stored in {} (owner-only file).",
+            store.credentials_path().display()
+        ),
+        SaveTarget::FileAfterKeychainFailure(err) => format!(
+            "WARNING: the OS keychain refused the write ({err}); credentials stored in the \
+             plaintext file {} instead.",
+            store.credentials_path().display()
+        ),
+    };
+    let summary = format!("Authenticated successfully. Token expires at {expires_at}. {stored_in}");
     match flags.format() {
         Format::Styled => {
             eprintln!("{summary}");
@@ -50,7 +66,12 @@ pub async fn login(flags: &GlobalFlags) -> Result<(), ApiError> {
         }
         format => render_ok(
             &format,
-            Response::new(json!({ "expires_at": expires_at })).with_summary(summary),
+            Response::new(json!({
+                "expires_at": expires_at,
+                "store": target.label(),
+                "keychain_fallback": matches!(target, SaveTarget::FileAfterKeychainFailure(_)),
+            }))
+            .with_summary(summary),
             &[],
             None,
         )

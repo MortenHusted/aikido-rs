@@ -69,6 +69,14 @@ CLI resolves the same platform paths via `os.UserConfigDir`.) The
 stored format is identical to the Go CLI's — including go-keyring's payload
 encoding — so existing logins keep working, in both directions.
 
+The fallback is never silent. `auth login` reports which backend received the
+secret (`store: "keychain" | "file"` in the JSON envelope, plus
+`keychain_fallback: true` when the keychain refused the write and the file
+took it), and a 401 refresh that has to fall back to the file warns on
+stderr. The file is created owner-only from its first byte and swapped into
+place atomically, so a crash mid-write cannot leave a truncated or
+world-readable copy behind; the config directory is created `0700`.
+
 On Linux the OS keychain backend is not built — the `keyring` dependency is
 scoped to macOS and Windows, so credentials always live in the 0600 file at
 `~/.config/aikido/credentials.json` (the platform config dir on Linux) and
