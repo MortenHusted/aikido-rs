@@ -17,7 +17,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = [
-    "rustls",
+    "rustls-no-provider", # crypto provider is ring, chosen in aikido-core
     "webpki-roots",
     "json",
     "query",

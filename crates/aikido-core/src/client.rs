@@ -37,6 +37,11 @@ const RETRY_AFTER_CAP: Duration = Duration::from_secs(10);
 /// HTTP client with the connect timeout applied — shared with the token
 /// exchange path so nothing in this crate can hang indefinitely.
 pub(crate) fn http_client() -> reqwest::Client {
+    // reqwest is built without a crypto provider (aws-lc-rs needs cmake and a
+    // per-target C toolchain, which broke every cross build), so ring is
+    // installed here, at the single place every request is born. A second
+    // call reports "already installed", which is the state we want.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .build()

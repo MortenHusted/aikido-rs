@@ -16,6 +16,12 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+# reqwest's `rustls` feature selects aws-lc-rs, whose C build needs cmake and
+# a per-target toolchain (NASM on Windows, a cross sysroot for musl/aarch64);
+# `cargo check --target` from a Mac fails in its build script. ring builds
+# with plain `cc` everywhere this CLI ships, so it is the one crypto
+# provider enabled and rustls therefore installs it as the process default.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1", features = ["time"] }
 chrono.workspace = true
 dirs.workspace = true
@@ -25,5 +31,7 @@ tokio.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true
 
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+# macOS only: Linux would need the D-Bus secret-service stack, and Windows
+# Credential Manager cannot hold the credential blob (see credentials.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
