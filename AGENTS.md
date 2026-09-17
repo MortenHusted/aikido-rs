@@ -6,11 +6,12 @@ is a pointer to this file.
 ## Commands
 
 ```sh
-make check                 # the four gates below, in order — run this before calling work done
+make check                 # the five gates below, in order — run this before calling work done
 cargo build --workspace
 cargo test --workspace     # wiremock + assert_cmd; never touches the real keychain or live API
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+cargo audit                # RustSec advisories against Cargo.lock; CI enforces it, locally it skips when not installed
 ```
 
 `make build` / `make release` also codesign the binary with a stable identity

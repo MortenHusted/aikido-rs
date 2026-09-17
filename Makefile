@@ -1,4 +1,4 @@
-.PHONY: build release install sign check gates clean
+.PHONY: build release install sign check gates audit clean
 
 # ---------------------------------------------------------------------------
 # Code signing — this is what stops macOS asking for keychain approval on
@@ -63,13 +63,23 @@ install: release
 	cargo install --path crates/aikido-cli --root "$(shell dirname $(BINDIR))" --force
 	@$(MAKE) --no-print-directory sign BIN=$(BINDIR)/aikido
 
-# The same four gates CI-equivalent work is judged by.
+# The five gates CI judges by. The audit runs last so a stale advisory
+# database never masks a compile or test failure; it fails the build on any
+# known vulnerability in Cargo.lock because this binary holds API credentials.
 gates: check
 check:
 	cargo build --workspace
 	cargo test --workspace
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo fmt --check
+	@$(MAKE) --no-print-directory audit
+
+audit:
+	@if command -v cargo-audit >/dev/null 2>&1; then \
+		cargo audit; \
+	else \
+		echo "audit: cargo-audit not installed (cargo install cargo-audit) — skipping locally; CI enforces it"; \
+	fi
 
 clean:
 	cargo clean
