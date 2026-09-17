@@ -27,6 +27,13 @@ pub async fn get(flags: &GlobalFlags, path: &str, query: &[String]) -> Result<()
 
 /// The path must stay inside the API base: relative (`/...`), no scheme or
 /// host, no `..` traversal, no inline query/fragment (use `--query`).
+///
+/// Percent signs and backslashes are rejected outright: the URL parser
+/// normalises `%2e%2e` to `..` and `\` to `/` before the request goes out,
+/// so a textual `..` check alone let `/%2e%2e/%2e%2e/oauth/token` reach the
+/// OAuth endpoint. Aikido's public routes are plain ASCII identifiers, so
+/// neither character has a legitimate use here; anything that needs
+/// encoding belongs in `--query`, which reqwest encodes itself.
 fn validate_path(path: &str) -> Result<String, ApiError> {
     let invalid = |reason: &str| {
         Err(ApiError::Api {
@@ -39,6 +46,9 @@ fn validate_path(path: &str) -> Result<String, ApiError> {
     }
     if path.contains("://") || path.starts_with("//") {
         return invalid("must not carry a scheme or host");
+    }
+    if path.contains('%') || path.contains('\\') {
+        return invalid("must not contain '%' or '\\' (they are normalised into traversal)");
     }
     if path.split('/').any(|segment| segment == "..") {
         return invalid("must not traverse outside the API base");
@@ -79,13 +89,15 @@ mod tests {
     #[test]
     fn rejects_paths_that_escape_the_base() {
         for bad in [
-            "openapi/spec",              // not rooted
-            "https://evil.example/x",    // absolute URL
-            "//evil.example/x",          // protocol-relative
-            "/issues/../../oauth/token", // traversal
-            "/spec?x=1",                 // inline query
-            "/spec#frag",                // fragment
-            "/spec with space",          // whitespace
+            "openapi/spec",               // not rooted
+            "https://evil.example/x",     // absolute URL
+            "//evil.example/x",           // protocol-relative
+            "/issues/../../oauth/token",  // traversal
+            "/%2e%2e/%2e%2e/oauth/token", // encoded traversal the URL parser would normalise
+            "/issues\\..\\..\\oauth",     // backslashes the URL parser treats as '/'
+            "/spec?x=1",                  // inline query
+            "/spec#frag",                 // fragment
+            "/spec with space",           // whitespace
         ] {
             assert!(validate_path(bad).is_err(), "must reject {bad:?}");
         }
