@@ -651,6 +651,39 @@ async fn issues_snooze_requires_until() {
         .stderr(predicate::str::contains("--until"));
 }
 
+/// A huge day count used to abort the process inside chrono (exit 101, no
+/// envelope). It must come back as an ordinary error envelope on stderr.
+#[tokio::test]
+async fn issues_snooze_rejects_absurd_durations_with_an_envelope_not_a_panic() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+
+    for (args, flag) in [
+        (
+            vec!["issues", "snooze", "5", "--until", "99999999999999999d"],
+            "--until",
+        ),
+        (
+            vec!["issues", "counts", "--since", "99999999999999999d"],
+            "--since",
+        ),
+    ] {
+        let mut full = args.clone();
+        full.push("--json");
+        let output = aikido(&server, dir.path()).args(&full).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{flag}: {output:?}");
+        let envelope: Value = serde_json::from_slice(&output.stderr)
+            .unwrap_or_else(|_| panic!("{flag}: stderr is not an envelope: {output:?}"));
+        assert_eq!(envelope["ok"], false);
+        let error = envelope["error"].as_str().unwrap();
+        assert!(
+            error.contains(flag) && error.contains("at most 3650 days"),
+            "{flag}: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn issues_severity_requires_level_and_reason() {
     let server = MockServer::start().await;
@@ -997,7 +1030,12 @@ async fn auth_login_with_env_credentials_stores_all_four_fields() {
         .args(["auth", "login", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Authenticated successfully"));
+        .stdout(predicate::str::contains("Authenticated successfully"))
+        // Login names the backend that received the secret, so a keychain
+        // that silently fell through to the file can never look like success.
+        .stdout(predicate::str::contains("\"store\": \"file\""))
+        .stdout(predicate::str::contains("\"keychain_fallback\": false"))
+        .stdout(predicate::str::contains("Credentials stored in"));
 
     let creds: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join("credentials.json")).unwrap(),
@@ -1219,6 +1257,10 @@ async fn api_get_rejects_paths_that_escape_the_base() {
         "https://evil.example/x",
         "//evil.example/x",
         "/issues/../../oauth/token",
+        // The URL parser normalises these into the traversal above, so they
+        // must be refused before a request is ever built.
+        "/%2e%2e/%2e%2e/oauth/token",
+        "/issues\\..\\..\\oauth\\token",
         "relative/path",
         "/spec?inline=1",
     ] {

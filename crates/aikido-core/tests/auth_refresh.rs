@@ -8,7 +8,7 @@
 use aikido_core::api::{self, IssueFilters};
 use aikido_core::auth;
 use aikido_core::client::{Client, RefreshCredentials};
-use aikido_core::credentials::{CredentialStore, Credentials};
+use aikido_core::credentials::{CredentialStore, Credentials, SaveTarget};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -279,4 +279,129 @@ fn store_load_returns_none_when_empty_and_clear_is_idempotent() {
     store.clear().unwrap();
     assert!(store.load().unwrap().is_none());
     store.clear().unwrap();
+}
+
+/// The file must be owner-only from its first byte, not chmod-ed after the
+/// fact: a pre-existing world-readable file is replaced, not reused, the
+/// directory created for it is private, and no temp file survives the swap.
+#[cfg(unix)]
+#[test]
+fn store_replaces_a_world_readable_file_and_creates_a_private_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("nested").join("aikido");
+    let store = CredentialStore::file_at(&dir);
+
+    assert_eq!(
+        store.save(&Credentials::default()).unwrap(),
+        SaveTarget::File
+    );
+    let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+    assert_eq!(
+        dir_mode & 0o777,
+        0o700,
+        "created config dir must be private"
+    );
+
+    let path = store.credentials_path();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    store
+        .save(&Credentials {
+            client_id: "id".into(),
+            client_secret: "sec".into(),
+            access_token: "tok".into(),
+            expires_at: String::new(),
+        })
+        .unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "rewrite must not inherit loose mode");
+    assert_eq!(store.load().unwrap().unwrap().access_token, "tok");
+
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name != "credentials.json")
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
+}
+
+/// A stray `{:?}` must never print the client secret or a bearer token.
+#[test]
+fn debug_output_redacts_secrets_everywhere_they_live() {
+    let creds = Credentials {
+        client_id: "public-id".into(),
+        client_secret: "SECRET-VALUE".into(),
+        access_token: "TOKEN-VALUE".into(),
+        expires_at: "2030-01-01T00:00:00Z".into(),
+    };
+    let client =
+        Client::new("https://example.test", "TOKEN-VALUE").with_refresh(RefreshCredentials {
+            client_id: "public-id".into(),
+            client_secret: "SECRET-VALUE".into(),
+        });
+    for rendered in [format!("{creds:?}"), format!("{client:?}")] {
+        assert!(!rendered.contains("SECRET-VALUE"), "{rendered}");
+        assert!(!rendered.contains("TOKEN-VALUE"), "{rendered}");
+        assert!(rendered.contains("public-id"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+    }
+}
+
+/// A refreshed token is not persisted over a store that cannot be read:
+/// treating a read failure as "empty" and saving would discard whatever the
+/// operator had stored there.
+#[tokio::test]
+async fn refresh_leaves_an_unreadable_store_untouched() {
+    let server = MockServer::start().await;
+    mount_token_endpoint(&server, 1).await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(header("authorization", "Bearer stale-token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .and(header("authorization", "Bearer fresh-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = CredentialStore::file_at(dir.path());
+    std::fs::write(store.credentials_path(), "{ this is not json").unwrap();
+
+    let client = Client::new(server.uri(), "stale-token")
+        .with_refresh(refresh_creds())
+        .with_store(store.clone());
+    api::list_issues(&client, &IssueFilters::default(), None)
+        .await
+        .expect("the API call itself must still succeed");
+
+    assert_eq!(
+        std::fs::read_to_string(store.credentials_path()).unwrap(),
+        "{ this is not json",
+        "an unreadable store must not be overwritten"
+    );
+}
+
+/// A server-supplied lifetime that does not fit a timestamp yields the
+/// documented "unknown" (empty) expiry instead of a panic.
+#[test]
+fn absurd_token_lifetimes_do_not_panic() {
+    let response: auth::TokenResponse = serde_json::from_value(json!({
+        "access_token": "t",
+        "expires_in": i64::MAX
+    }))
+    .unwrap();
+    assert_eq!(response.expires_at(), "");
+    let sane: auth::TokenResponse = serde_json::from_value(json!({
+        "access_token": "t",
+        "expires_in": 3600
+    }))
+    .unwrap();
+    assert!(!sane.expires_at().is_empty());
 }
