@@ -488,6 +488,32 @@ async fn expired_token_refreshes_and_persists_like_the_cli() {
     assert_eq!(creds["access_token"], "fresh-token");
 }
 
+/// A huge day count used to panic inside the tool handler. The server must
+/// answer with an invalid-params error and stay alive for the next call.
+#[tokio::test(flavor = "multi_thread")]
+async fn absurd_snooze_duration_is_an_error_and_the_server_survives() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/issues/export"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(dir.path(), "valid-token");
+    let mut mcp = McpServer::start_legacy(&server.uri(), dir.path());
+
+    let response = mcp.call_tool(
+        2,
+        "aikido_snooze_issue",
+        json!({ "issue_id": 5, "until": "99999999999999999d" }),
+    );
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(message.contains("at most 3650 days"), "{response}");
+
+    let next = mcp.call_tool(3, "aikido_list_issues", json!({}));
+    assert_eq!(tool_json(&next), json!([]));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_credentials_is_a_tool_error_with_the_auth_hint() {
     let server = MockServer::start().await;

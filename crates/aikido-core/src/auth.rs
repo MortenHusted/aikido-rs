@@ -16,8 +16,14 @@ pub struct TokenResponse {
 
 impl TokenResponse {
     /// Absolute expiry as an RFC3339 timestamp, computed from `expires_in`.
+    /// Empty when the server's lifetime does not fit a timestamp: the stored
+    /// `expires_at` field already documents empty as "unknown", and a server
+    /// value must never be able to panic the client.
     pub fn expires_at(&self) -> String {
-        (chrono::Utc::now() + chrono::Duration::seconds(self.expires_in)).to_rfc3339()
+        chrono::TimeDelta::try_seconds(self.expires_in)
+            .and_then(|lifetime| chrono::Utc::now().checked_add_signed(lifetime))
+            .map(|expiry| expiry.to_rfc3339())
+            .unwrap_or_default()
     }
 }
 
