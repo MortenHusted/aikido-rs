@@ -22,8 +22,9 @@ use aikido_core::error::ApiError;
 #[command(
     name = "aikido",
     version,
-    about = "Aikido Security CLI",
-    long_about = "A command-line interface for the Aikido Security API.\n\n\
+    about = "Unofficial Aikido Security CLI",
+    long_about = "An unofficial command-line interface for the Aikido Security public API \
+        (not affiliated with Aikido Security).\n\n\
         Credentials: `aikido auth login` (stored in the OS keychain, service \
         'aikido-cli', or credentials.json in the platform config dir — \
         ~/Library/Application Support/aikido on macOS, ~/.config/aikido on \

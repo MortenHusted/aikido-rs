@@ -1,8 +1,14 @@
 # aikido-rs
 
-Rust rewrite of the Go `aikido-cli`: a CLI (`aikido`) and an MCP server
-(`aikido-mcp`) for the [Aikido Security](https://app.aikido.dev) REST API,
-built on one shared core so auth and API behaviour cannot drift between them.
+An unofficial CLI (`aikido`) and MCP server (`aikido-mcp`) for the
+[Aikido Security](https://www.aikido.dev) public REST API, built in Rust on
+one shared core so auth and API behaviour cannot drift between them. A rewrite
+of an earlier Go CLI by the same author.
+
+> This project is not affiliated with, endorsed by, or supported by Aikido
+> Security. "Aikido" is a trademark of Aikido Security BV, used here only to
+> describe the API this tool talks to. You bring your own API credentials from
+> your own Aikido workspace; nothing is shared with the author.
 
 ```
 crates/aikido-core/   API client, OAuth auth, credential store, session resolution
@@ -11,6 +17,24 @@ crates/aikido-mcp/    binary `aikido-mcp` (MCP server over stdio)
 ```
 
 ## Install
+
+Prebuilt binaries for macOS, Linux, and Windows are attached to every
+[GitHub release](https://github.com/MortenHusted/aikido-rs/releases):
+
+```sh
+brew install MortenHusted/tap/aikido-rs        # macOS and Linux, installs `aikido`
+brew install MortenHusted/tap/aikido-mcp       # the MCP server
+```
+
+or with the release installers (they put the binaries in `~/.cargo/bin`):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/MortenHusted/aikido-rs/releases/latest/download/aikido-cli-installer.sh | sh
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/MortenHusted/aikido-rs/releases/latest/download/aikido-cli-installer.ps1 | iex"
+```
+
+From source (needs only a Rust toolchain and a C compiler; no cmake, NASM, or
+OpenSSL):
 
 ```sh
 cargo install --path crates/aikido-cli --root ~/.local
@@ -272,20 +296,23 @@ Tools:
 
 ## Platforms and releases
 
-Supported targets, each built on a native runner by the release workflow
-(`.github/workflows/release.yml`, on a `v*` tag) and attached to the GitHub
-release with a `SHA256SUMS` file:
+Releases are cut by [dist](https://opensource.axo.dev/cargo-dist/) from
+`dist-workspace.toml`: a `v*` tag builds every target below, attaches the
+archives, per-file checksums, and shell/PowerShell installers to the GitHub
+release, and publishes the Homebrew formulas to `MortenHusted/homebrew-tap`.
+Edit the config, then run `dist generate` to refresh the workflow; never
+hand-edit `.github/workflows/release.yml`.
 
 | Target | Notes |
 |---|---|
 | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Keychain backend available |
-| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | Static; file store only |
+| `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | File store only |
 | `x86_64-pc-windows-msvc` | File store only (see Authentication) |
 
 TLS is rustls with the `ring` crypto provider and bundled webpki roots, so
 no target needs cmake, NASM, or system OpenSSL. CI runs the full test suite
-on Linux, macOS, and Windows. From a Mac, `make cross-check` type-checks the
-Linux musl and Windows targets through zig (`brew install zig && cargo
+on Linux, macOS, and Windows. From a Mac, `make cross-check` runs clippy for
+the Linux and Windows GNU targets through zig (`brew install zig && cargo
 install cargo-zigbuild`, then `rustup target add` the targets the Makefile
 lists).
 
