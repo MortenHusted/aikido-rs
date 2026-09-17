@@ -8,7 +8,7 @@
 //! directions end to end against the real login keychain using a throwaway
 //! service name — never the real `aikido-cli` entry.
 
-use aikido_core::credentials::{decode_go_keyring_payload, encode_go_keyring_payload, Credentials};
+use aikido_core::credentials::{decode_go_keyring_payload, encode_go_keyring_payload};
 
 const SAMPLE_JSON: &str = r#"{"client_id":"id-1","client_secret":"sec-1","access_token":"tok-1","expires_at":"2030-01-01T00:00:00Z"}"#;
 
@@ -71,7 +71,7 @@ fn decode_rejects_corrupt_base64() {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use aikido_core::credentials::CredentialStore;
+    use aikido_core::credentials::{CredentialStore, Credentials};
     use std::process::Command;
 
     /// Skip (returning false) when no usable keychain is available — CI

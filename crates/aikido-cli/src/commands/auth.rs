@@ -11,7 +11,7 @@ use std::io::{BufRead, IsTerminal, Write};
 
 use aikido_core::auth::exchange_token;
 use aikido_core::client::base_url_from_env;
-use aikido_core::credentials::{CredentialStore, Credentials, SaveTarget};
+use aikido_core::credentials::{CredentialStore, Credentials, SaveTarget, StoreSource};
 use aikido_core::error::ApiError;
 use aikido_core::session::{self, TokenSource, CLIENT_ID_ENV, CLIENT_SECRET_ENV};
 use serde_json::json;
@@ -179,6 +179,7 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
                 "expires_at": "",
                 "expired": false,
                 "checked": false,
+                "shadow_file": null,
             });
             if format == Format::Styled {
                 eprintln!("{summary}");
@@ -194,15 +195,18 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
         }
     };
 
-    let source = match session.token_source {
-        TokenSource::Env => "env".to_string(),
-        TokenSource::Store => {
-            if store.file_exists() {
-                "file".to_string()
-            } else {
-                "keyring".to_string()
-            }
-        }
+    let source = match (session.token_source, session.store_source) {
+        (TokenSource::Env, _) => "env",
+        (TokenSource::Store, Some(read_from)) => read_from.label(),
+        // A stored token always comes with the backend that held it.
+        (TokenSource::Store, None) => "store",
+    };
+    // After a keychain-to-file fallback both backends hold credentials. The
+    // file copy is then a stale plaintext shadow the operator should know
+    // about; `auth logout` clears both.
+    let shadow_file = match session.store_source {
+        Some(StoreSource::Keychain) if store.file_exists() => Some(store.credentials_path()),
+        _ => None,
     };
 
     let expires_at = session.expires_at.clone().unwrap_or_default();
@@ -226,7 +230,7 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
         Err(err) => (true, false, format!("validity not checked: {err}")),
     };
 
-    let summary = match (authenticated, checked) {
+    let mut summary = match (authenticated, checked) {
         (true, true) if expired => format!(
             "Authenticated (source: {source}); stored expiry {expires_at} has passed but the token refreshed"
         ),
@@ -239,6 +243,13 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
         (false, true) => format!("Token invalid (source: {source}): {check_note}"),
         _ => format!("Credentials present (source: {source}) — {check_note}"),
     };
+    if let Some(path) = &shadow_file {
+        summary.push_str(&format!(
+            ". A plaintext credentials file also exists at {} (left by an earlier keychain \
+             fallback); `aikido auth logout` removes both",
+            path.display()
+        ));
+    }
 
     let data = json!({
         "authenticated": authenticated,
@@ -246,6 +257,7 @@ pub async fn status(flags: &GlobalFlags) -> Result<(), ApiError> {
         "expires_at": expires_at,
         "expired": expired,
         "checked": checked,
+        "shadow_file": shadow_file,
     });
 
     if format == Format::Styled {

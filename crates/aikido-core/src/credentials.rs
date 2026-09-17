@@ -9,8 +9,17 @@
 //!
 //! Backend selection (so tests never touch the real keychain):
 //! - `AIKIDO_TOKEN_STORE=file`      → file only
-//! - `AIKIDO_TOKEN_STORE=keychain`  → keychain only
-//! - unset (default)                → keychain first, file fallback (Go parity)
+//! - `AIKIDO_TOKEN_STORE=keychain`  → keychain only (macOS builds only)
+//! - unset (default)                → macOS: keychain first, file fallback
+//!   (Go parity); every other platform: file
+//!
+//! The keychain backend is compiled only on macOS. Linux would need the
+//! D-Bus secret-service stack for a platform where this CLI runs headless,
+//! and Windows Credential Manager caps a blob at 2560 bytes of UTF-16
+//! (`CRED_MAX_CREDENTIAL_BLOB_SIZE`): the credential JSON measured 1643
+//! characters for a real Aikido token, 3286 bytes as UTF-16, so every write
+//! would fail and fall through to the file anyway. Better to say so at
+//! build time than to warn on every login.
 //!
 //! `AIKIDO_CONFIG_DIR` overrides the config directory for the file backend.
 
@@ -21,8 +30,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 const KEYRING_SERVICE: &str = "aikido-cli";
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const KEYRING_USER: &str = "default";
+
+/// Whether this build carries a keychain backend at all — see the module
+/// docs for why that is macOS only.
+pub const KEYCHAIN_AVAILABLE: bool = cfg!(target_os = "macos");
 
 pub const STORE_ENV: &str = "AIKIDO_TOKEN_STORE";
 pub const CONFIG_DIR_ENV: &str = "AIKIDO_CONFIG_DIR";
@@ -78,6 +91,32 @@ impl SaveTarget {
     }
 }
 
+/// Which backend a [`CredentialStore::load`] actually read. Reported by
+/// `auth status`, which must never infer it from what happens to exist on
+/// disk: after a keychain-to-file fallback both backends hold credentials,
+/// and only the one that was read says where the active token came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreSource {
+    Keychain,
+    File,
+}
+
+impl StoreSource {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Keychain => "keychain",
+            Self::File => "file",
+        }
+    }
+}
+
+/// Credentials together with the backend they were read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stored {
+    pub credentials: Credentials,
+    pub source: StoreSource,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     /// Keychain first, file fallback — the Go CLI's behaviour.
@@ -128,7 +167,13 @@ impl CredentialStore {
     }
 
     fn backend(&self) -> Backend {
-        self.forced_backend.unwrap_or_else(backend_from_env)
+        match self.forced_backend.unwrap_or_else(backend_from_env) {
+            // Without a keychain in the build, "keychain first" would fail
+            // every read with a build-configuration error and make a fresh
+            // Linux install report that instead of "not authenticated".
+            Backend::Auto if !KEYCHAIN_AVAILABLE => Backend::File,
+            backend => backend,
+        }
     }
 
     fn keyring_service(&self) -> &str {
@@ -153,19 +198,32 @@ impl CredentialStore {
 
     /// Load stored credentials. `Ok(None)` when nothing is stored.
     pub fn load(&self) -> Result<Option<Credentials>> {
+        Ok(self.load_with_source()?.map(|stored| stored.credentials))
+    }
+
+    /// Load stored credentials together with the backend that held them.
+    pub fn load_with_source(&self) -> Result<Option<Stored>> {
+        let from_keychain = |credentials| Stored {
+            credentials,
+            source: StoreSource::Keychain,
+        };
+        let from_file = |credentials| Stored {
+            credentials,
+            source: StoreSource::File,
+        };
         match self.backend() {
-            Backend::Keychain => keyring_get(self.keyring_service()),
-            Backend::File => self.file_get(),
+            Backend::Keychain => Ok(keyring_get(self.keyring_service())?.map(from_keychain)),
+            Backend::File => Ok(self.file_get()?.map(from_file)),
             Backend::Auto => match keyring_get(self.keyring_service()) {
-                Ok(Some(creds)) => Ok(Some(creds)),
-                Ok(None) => self.file_get(),
+                Ok(Some(creds)) => Ok(Some(from_keychain(creds))),
+                Ok(None) => Ok(self.file_get()?.map(from_file)),
                 // Keychain failed (e.g. an unanswerable authorisation
                 // prompt timed out). Degrade to the file quietly only when
                 // the file actually has credentials; otherwise surface the
                 // keychain error instead of a misleading "not
                 // authenticated".
                 Err(keychain_err) => match self.file_get() {
-                    Ok(Some(creds)) => Ok(Some(creds)),
+                    Ok(Some(creds)) => Ok(Some(from_file(creds))),
                     _ => Err(keychain_err),
                 },
             },
@@ -367,7 +425,6 @@ fn decode_hex(input: &str) -> Result<Vec<u8>> {
 // bounds its wait; on expiry the worker is abandoned (it dies with the
 // process) and the caller gets an actionable error instead of a hang.
 
-use std::sync::mpsc;
 use std::time::Duration;
 
 /// Long enough for a present human to read the SecurityAgent prompt and
@@ -388,7 +445,7 @@ pub fn keychain_deadline_for(interactive: bool) -> Duration {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn with_keychain_deadline<T: Send + 'static>(
     operation: &'static str,
     call: impl FnOnce() -> Result<T> + Send + 'static,
@@ -398,13 +455,16 @@ fn with_keychain_deadline<T: Send + 'static>(
     call_with_deadline(deadline, operation, call)
 }
 
-/// Run `call` on a worker thread and wait at most `deadline` for it.
+/// Run `call` on a worker thread and wait at most `deadline` for it. Only
+/// the macOS keychain path has a blocking FFI call to bound; the tests keep
+/// it compiled on every platform so the deadline contract is checked there.
+#[cfg(any(target_os = "macos", test))]
 fn call_with_deadline<T: Send + 'static>(
     deadline: Duration,
     operation: &'static str,
     call: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("aikido-keychain".to_string())
         .spawn(move || {
@@ -428,13 +488,13 @@ fn call_with_deadline<T: Send + 'static>(
 // Keychain backend
 // ---------------------------------------------------------------------------
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn keyring_entry(service: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(service, KEYRING_USER)
         .with_context(|| format!("opening keyring entry {service}"))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn keyring_get(service: &str) -> Result<Option<Credentials>> {
     let service = service.to_string();
     with_keychain_deadline("reading credentials", move || {
@@ -454,7 +514,7 @@ fn keyring_get(service: &str) -> Result<Option<Credentials>> {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn keyring_set(service: &str, data: &str) -> Result<()> {
     let service = service.to_string();
     let payload = encode_go_keyring_payload(data);
@@ -465,7 +525,7 @@ fn keyring_set(service: &str, data: &str) -> Result<()> {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn keyring_delete(service: &str) -> Result<()> {
     let service = service.to_string();
     with_keychain_deadline("deleting credentials", move || {
@@ -478,17 +538,17 @@ fn keyring_delete(service: &str) -> Result<()> {
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 fn keyring_get(_service: &str) -> Result<Option<Credentials>> {
     anyhow::bail!("OS keychain backend is not available in this build")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 fn keyring_set(_service: &str, _data: &str) -> Result<()> {
     anyhow::bail!("OS keychain backend is not available in this build")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 fn keyring_delete(_service: &str) -> Result<()> {
     Ok(())
 }

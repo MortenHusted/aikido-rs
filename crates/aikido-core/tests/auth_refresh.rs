@@ -8,7 +8,7 @@
 use aikido_core::api::{self, IssueFilters};
 use aikido_core::auth;
 use aikido_core::client::{Client, RefreshCredentials};
-use aikido_core::credentials::{CredentialStore, Credentials, SaveTarget};
+use aikido_core::credentials::{CredentialStore, Credentials, StoreSource};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -287,6 +287,7 @@ fn store_load_returns_none_when_empty_and_clear_is_idempotent() {
 #[cfg(unix)]
 #[test]
 fn store_replaces_a_world_readable_file_and_creates_a_private_dir() {
+    use aikido_core::credentials::SaveTarget;
     use std::os::unix::fs::PermissionsExt;
     let parent = tempfile::tempdir().unwrap();
     let dir = parent.path().join("nested").join("aikido");
@@ -326,6 +327,24 @@ fn store_replaces_a_world_readable_file_and_creates_a_private_dir() {
         leftovers.is_empty(),
         "temp files left behind: {leftovers:?}"
     );
+}
+
+/// The store says which backend it read, so `auth status` never has to
+/// guess from what exists on disk.
+#[test]
+fn load_reports_the_backend_it_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CredentialStore::file_at(dir.path());
+    assert!(store.load_with_source().unwrap().is_none());
+    store
+        .save(&Credentials {
+            access_token: "tok".into(),
+            ..Credentials::default()
+        })
+        .unwrap();
+    let stored = store.load_with_source().unwrap().unwrap();
+    assert_eq!(stored.source, StoreSource::File);
+    assert_eq!(stored.credentials.access_token, "tok");
 }
 
 /// A stray `{:?}` must never print the client secret or a bearer token.

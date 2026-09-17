@@ -854,8 +854,53 @@ async fn auth_status_validates_a_working_token() {
     assert_eq!(envelope["data"]["authenticated"], true);
     assert_eq!(envelope["data"]["checked"], true);
     assert_eq!(envelope["data"]["source"], "file");
+    assert_eq!(envelope["data"]["shadow_file"], Value::Null);
     assert_eq!(envelope["data"]["expires_at"], "2030-01-01T00:00:00Z");
     assert_eq!(envelope["data"]["expired"], false);
+}
+
+/// Off macOS there is no keychain in the build, so the *default* backend
+/// (AIKIDO_TOKEN_STORE unset) must be the file, and a fresh install must
+/// read as "not authenticated" rather than as a build-configuration error.
+/// On macOS the default backend would touch the real keychain, so this runs
+/// only where the file is the whole story.
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn default_store_is_the_file_where_no_keychain_is_built() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/public/v1/repositories/code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("aikido").unwrap();
+    cmd.env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("AIKIDO_BASE_URL", server.uri())
+        .env("AIKIDO_CONFIG_DIR", dir.path());
+    let output = cmd.args(["auth", "status", "--json"]).output().unwrap();
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["data"]["authenticated"], false);
+    assert!(
+        envelope["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Not authenticated"),
+        "{envelope}"
+    );
+
+    write_credentials(dir.path(), "valid-token", "2030-01-01T00:00:00Z");
+    let mut cmd = Command::cargo_bin("aikido").unwrap();
+    cmd.env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("AIKIDO_BASE_URL", server.uri())
+        .env("AIKIDO_CONFIG_DIR", dir.path());
+    let output = cmd.args(["auth", "status", "--json"]).output().unwrap();
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(envelope["data"]["authenticated"], true, "{envelope}");
+    assert_eq!(envelope["data"]["source"], "file");
 }
 
 #[tokio::test]
@@ -1456,6 +1501,9 @@ async fn containers_list_stale_days_filters_and_annotates() {
     );
 }
 
+// The zone is pinned through TZ, which chrono honours on Unix only; Windows
+// takes the zone from the system, so these two run where the pin holds.
+#[cfg(unix)]
 #[tokio::test]
 async fn containers_list_shows_scan_freshness_in_the_table() {
     let now = chrono::Utc::now().timestamp();
@@ -1492,6 +1540,7 @@ async fn containers_list_shows_scan_freshness_in_the_table() {
 /// Derived dates render in the operator's local zone, pinned via the TZ env
 /// var on the subprocess so the test is deterministic on any machine:
 /// 1785196041 is 2026-07-27 23:47 UTC but already 2026-07-28 in Copenhagen.
+#[cfg(unix)]
 #[tokio::test]
 async fn derived_dates_render_in_the_local_zone_not_utc() {
     let server = MockServer::start().await;

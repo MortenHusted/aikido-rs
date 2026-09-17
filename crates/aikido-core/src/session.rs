@@ -9,7 +9,7 @@
 //! credentials was the Go CLI's unrecoverable-failure bug.
 
 use crate::client::{base_url_from_env, Client, RefreshCredentials};
-use crate::credentials::CredentialStore;
+use crate::credentials::{CredentialStore, StoreSource};
 use crate::error::ApiError;
 
 pub const TOKEN_ENV: &str = "AIKIDO_TOKEN";
@@ -41,6 +41,10 @@ impl TokenSource {
 pub struct Session {
     pub client: Client,
     pub token_source: TokenSource,
+    /// Which store backend was read, when the store was consulted and held
+    /// credentials — the fact `auth status` reports, not a guess from what
+    /// exists on disk.
+    pub store_source: Option<StoreSource>,
     /// Stored expiry (RFC3339) when the token came from the store.
     pub expires_at: Option<String>,
 }
@@ -67,7 +71,7 @@ pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiErr
     let stored = if env_token.is_some() && env_refresh.is_some() {
         None
     } else {
-        match store.load() {
+        match store.load_with_source() {
             Ok(stored) => stored,
             Err(err) if env_token.is_some() => {
                 // An env token can proceed without stored refresh
@@ -78,6 +82,9 @@ pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiErr
             Err(err) => return Err(ApiError::auth(format!("{err:#}"))),
         }
     };
+
+    let store_source = stored.as_ref().map(|stored| stored.source);
+    let stored = stored.map(|stored| stored.credentials);
 
     // Client credentials: env wins, else whatever the store holds.
     let refresh = env_refresh.or_else(|| {
@@ -124,6 +131,7 @@ pub fn resolve(store: &CredentialStore, verbose: bool) -> Result<Session, ApiErr
     Ok(Session {
         client,
         token_source,
+        store_source,
         expires_at,
     })
 }
