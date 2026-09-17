@@ -6,7 +6,7 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CacheScope, CallToolResult, ContentBlock, Implementation, ListToolsResult,
-    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo,
+    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler, ServiceExt};
@@ -706,11 +706,11 @@ impl ServerHandler for AikidoServer {
         }
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // rmcp's build-environment default identifies the SDK crate, not this
         // binary. Expose the application name and version alongside its
         // capabilities and modern cache hints.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
             Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
         )
     }
